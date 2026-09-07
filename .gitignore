@@ -1,0 +1,3 @@
+plugin/bin/
+*.log
+.DS_Store
