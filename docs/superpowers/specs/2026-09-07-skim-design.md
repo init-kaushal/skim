@@ -19,29 +19,41 @@ which is not available to an individual developer.
 `skim` reproduces the useful core of that pattern locally, with no external
 platform.
 
-**Model-agnostic on the driving side.** `skim` does not care which model runs
-the main Claude Code session — Sonnet, Opus, Fable, or whatever a future
-release adds. It hooks tool calls, not the model, so it works unchanged for any
-of them. Only the *worker* is pinned to a fixed cheap tier: a **nested
-`claude -p` call pinned to Haiku** for the interception paths (`Read`, `Grep`,
-`Bash`), and, for the opt-in `code-writer` path, a real Claude Code `Task`
-subagent whose agent definition pins `model: haiku`. The worker model is a
-config value (`config.model`) so it can be repointed, but it is always chosen
-independently of the session model and defaults to the cheapest capable tier.
+**Model-agnostic on the driving side.** `skim` does not branch on which model
+runs the main Claude Code session — Sonnet, Opus, Fable, or whatever a future
+release adds. It hooks tool calls, not the model, so the detection and
+substitution logic is identical for all of them (see §9 for why fixed
+thresholds still *behave* slightly differently across models with different
+context sizes).
+
+Two independently-configured worker paths, both pinned to a cheap tier:
+
+- **Interception worker** — a nested `claude -p` call for `Read` / `Grep` /
+  `Bash`. Its model is `config.model` (default `claude-haiku-4-5-20251001`),
+  passed with an explicit `--model` every time so it never inherits the session
+  model. Repointable.
+- **`code-writer` subagent** — a real Claude Code `Task` subagent for the
+  opt-in boilerplate path. Its model is pinned in the agent's `.md` frontmatter
+  (`model: haiku`), *not* driven by `config.model`; changing one does not
+  change the other.
 
 ### What "reduce token cost" means here
 
-The benefit does not depend on a particular subscription or model, and it grows
-with how expensive the driving model is:
+Two mechanics, neither depending on subscription tier:
 
 1. **Digest instead of dump.** A 900-line file becomes a ~500-token structured
    map + summary rather than thousands of tokens of raw content.
 2. **No re-send.** The digest, not the file, is what occupies the main context
    on every following turn — this compounds every turn the session continues.
-3. **Cheap-tier work.** The one-off read/scan/summarize pass runs on Haiku
-   instead of the (possibly much more expensive) session model.
 
-Net effect on a **Claude Pro/Max subscription** (no per-token invoice): less
+Both mechanics move bulk *out of* the session model's context. They do not add
+a third saving: the read/scan/summarize pass on Haiku is **new work `skim`
+introduces**, so it is a cost (§9), bet to be outweighed by (1) and (2) and
+measured by `skim stats` — not a gain to count.
+
+The value of what is saved scales with the session model's per-token
+weight — highest on Opus, lowest when the session already runs on Haiku. Net
+effect on a **Claude Pro/Max subscription** (no per-token invoice): less
 pressure on the 5-hour and weekly usage limits, and slower context-window
 growth. On an **API-metered** setup the same mechanics reduce the actual bill;
 v1 does not add dollar accounting for that case, but nothing in the design
@@ -55,8 +67,9 @@ Haiku call), mitigated by caching and a kill switch.
 - Intercept large `Read`, wide `Grep`, and noisy `Bash` operations before they
   run and substitute a cheap Haiku-produced digest.
 - Work regardless of which model drives the main Claude Code session (Sonnet,
-  Opus, Fable, …). Only the worker is pinned to a cheap tier; nothing in the
-  detection or substitution path is model-specific.
+  Opus, Fable, …). Only the worker paths are pinned to a cheap tier; the
+  detection and substitution logic does not branch on the session model
+  (behaviour still varies with a model's context size — §9).
 - Preserve the agent's ability to get exact content when it needs it (targeted
   re-read, or an explicit force-full escape hatch). Never lose data.
 - Provide an opt-in `code-writer` delegation path for boilerplate.
@@ -66,9 +79,9 @@ Haiku call), mitigated by caching and a kill switch.
 
 ### Non-goals
 
-- No dollar-cost accounting or invoicing (no invoice on a Pro/Max subscription;
-  API-metered accounting is a possible follow-up).
-- No support for API-metered billing models in v1 (design does not preclude it).
+- No dollar-cost accounting. On a Pro/Max subscription there is no invoice to
+  account for; for API-metered use the mechanics still apply but `skim` adds no
+  billing readout in v1 (not precluded — §10).
 - No local-model (Ollama) backend in v1.
 - No interception of operations that need design judgement — the `code-writer`
   path is explicitly scoped to mechanical boilerplate.
@@ -198,9 +211,12 @@ SKIM_ACTIVE=1 claude -p --model <config.model> \
   instruction.
 - `--max-turns 1` bounds it to a single response.
 - Parse the `.result` field as JSON against the expected schema (5.1).
-- If `config.model` is unset or names a model this CLI cannot run, the worker
-  call is treated as a failure and the hook degrades open (4.5); `skim doctor`
-  flags it.
+- `config.model` is validated once at config load, not per call. If it is empty
+  or names a model this CLI cannot run, `skim` enters the same no-op
+  pass-through state as the kill switches (4.0 / §7) — every hook allows its
+  tool through immediately, with no nested `claude -p` attempt — and
+  `skim doctor` reports the bad value. This avoids paying a failed worker
+  round-trip (and log line) on every intercepted operation.
 
 ### 4.5 Graceful degradation
 
@@ -329,7 +345,9 @@ approximation; they are indicative, not exact.
 
 1. `SKIM_DISABLED=1` in the environment.
 2. `"disabled": true` in config (toggled by `/skim off` / `/skim on`).
-3. `passthrough_globs` — per-path opt-out.
+3. Invalid `config.model` (empty or unrunnable) — forced pass-through until
+   fixed; surfaced by `skim doctor`.
+4. `passthrough_globs` — per-path opt-out.
 
 When disabled, every hook is a no-op pass-through.
 
