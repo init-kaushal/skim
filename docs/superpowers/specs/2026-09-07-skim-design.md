@@ -17,22 +17,35 @@ Portal's implementation depends on an authenticated Spotify Portal instance,
 which is not available to an individual developer.
 
 `skim` reproduces the useful core of that pattern locally, with no external
-platform, for a developer on a **Claude Pro subscription**. The worker is a
-**nested `claude -p` call pinned to Haiku** for the interception paths (`Read`,
-`Grep`, `Bash`); the opt-in `code-writer` path instead uses a real Claude Code
-`Task` subagent whose agent definition pins `model: haiku`.
+platform.
+
+**Model-agnostic on the driving side.** `skim` does not care which model runs
+the main Claude Code session — Sonnet, Opus, Fable, or whatever a future
+release adds. It hooks tool calls, not the model, so it works unchanged for any
+of them. Only the *worker* is pinned to a fixed cheap tier: a **nested
+`claude -p` call pinned to Haiku** for the interception paths (`Read`, `Grep`,
+`Bash`), and, for the opt-in `code-writer` path, a real Claude Code `Task`
+subagent whose agent definition pins `model: haiku`. The worker model is a
+config value (`config.model`) so it can be repointed, but it is always chosen
+independently of the session model and defaults to the cheapest capable tier.
 
 ### What "reduce token cost" means here
 
-On a Pro subscription there is no per-token invoice to shrink. The gains are:
+The benefit does not depend on a particular subscription or model, and it grows
+with how expensive the driving model is:
 
 1. **Digest instead of dump.** A 900-line file becomes a ~500-token structured
    map + summary rather than thousands of tokens of raw content.
 2. **No re-send.** The digest, not the file, is what occupies the main context
-   on every following turn.
+   on every following turn — this compounds every turn the session continues.
+3. **Cheap-tier work.** The one-off read/scan/summarize pass runs on Haiku
+   instead of the (possibly much more expensive) session model.
 
-Net effect: less pressure on the 5-hour and weekly usage limits, and slower
-context-window growth. The cost is added latency per interception (a nested
+Net effect on a **Claude Pro/Max subscription** (no per-token invoice): less
+pressure on the 5-hour and weekly usage limits, and slower context-window
+growth. On an **API-metered** setup the same mechanics reduce the actual bill;
+v1 does not add dollar accounting for that case, but nothing in the design
+blocks it. The cost either way is added latency per interception (a nested
 Haiku call), mitigated by caching and a kill switch.
 
 ## 2. Goals / Non-goals
@@ -41,6 +54,9 @@ Haiku call), mitigated by caching and a kill switch.
 
 - Intercept large `Read`, wide `Grep`, and noisy `Bash` operations before they
   run and substitute a cheap Haiku-produced digest.
+- Work regardless of which model drives the main Claude Code session (Sonnet,
+  Opus, Fable, …). Only the worker is pinned to a cheap tier; nothing in the
+  detection or substitution path is model-specific.
 - Preserve the agent's ability to get exact content when it needs it (targeted
   re-read, or an explicit force-full escape hatch). Never lose data.
 - Provide an opt-in `code-writer` delegation path for boilerplate.
@@ -50,7 +66,8 @@ Haiku call), mitigated by caching and a kill switch.
 
 ### Non-goals
 
-- No dollar-cost accounting or invoicing (there is no invoice on Pro).
+- No dollar-cost accounting or invoicing (no invoice on a Pro/Max subscription;
+  API-metered accounting is a possible follow-up).
 - No support for API-metered billing models in v1 (design does not preclude it).
 - No local-model (Ollama) backend in v1.
 - No interception of operations that need design judgement — the `code-writer`
@@ -175,10 +192,15 @@ SKIM_ACTIVE=1 claude -p --model <config.model> \
   --output-format json --max-turns 1 < <payload>
 ```
 
+- `--model` is passed explicitly every time, so the worker never inherits the
+  session model. `config.model` defaults to `claude-haiku-4-5-20251001`.
 - The worker is given no tools; it receives raw content plus a JSON-schema
   instruction.
 - `--max-turns 1` bounds it to a single response.
 - Parse the `.result` field as JSON against the expected schema (5.1).
+- If `config.model` is unset or names a model this CLI cannot run, the worker
+  call is treated as a failure and the hook degrades open (4.5); `skim doctor`
+  flags it.
 
 ### 4.5 Graceful degradation
 
@@ -345,10 +367,17 @@ When disabled, every hook is a no-op pass-through.
   `permissionDecisionReason` is delivered to the model as usable text on the
   installed Claude Code version. First implementation task is a spike to
   confirm this and the exact JSON envelope.
-- **Nested `claude -p` and quota.** Worker calls still count against the Pro
+- **Nested `claude -p` and quota.** Worker calls still count against the
   account. The design bets that Haiku-weighted worker tokens plus the
   no-re-send saving nets out positive; `skim stats` is what proves or disproves
-  it in practice.
+  it in practice. The margin is widest when the session model is expensive
+  (Opus) and narrowest when the session already runs on Haiku — in the latter
+  case `/skim off` or a raised threshold is the right call.
+- **Absolute vs. model-relative thresholds.** `read_max_lines` / `_bytes` are
+  fixed numbers, not a fraction of the session model's context window. This is
+  a deliberate v1 simplification; different driving models have different
+  context sizes, but a fixed "this file is big" line is predictable and easy to
+  reason about. Revisit only if it proves wrong in practice.
 - **`Grep` double-run.** For under-threshold greps the hook runs ripgrep and
   then Claude Code runs its own. Cheap, but noted.
 - **Binary distribution.** The plugin must ship a binary matching the user's
