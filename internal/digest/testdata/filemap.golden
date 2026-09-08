@@ -1,0 +1,14 @@
+skim: /home/u/proj/internal/config/config.go is large — digest instead of full contents.
+
+Config loader with validation and precedence rules.
+
+Structure:
+  1-20       imports + package doc
+  21-90      type Config + Default()
+  91-160     Load() and Save()
+
+Key symbols: Config, Default, Load, Save
+Note: line numbers approximate +/- 3
+
+For exact lines, Read again with offset/limit on the range you need.
+To force the full file: skim cat /home/u/proj/internal/config/config.go

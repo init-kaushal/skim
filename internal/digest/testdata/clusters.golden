@@ -1,0 +1,12 @@
+skim: 34 matches — digest instead of full results.
+
+Handler wiring for each intercepted tool.
+
+    23  internal/handler/        per-tool orchestration
+    11  internal/detect/         threshold checks
+
+Representative files:
+  internal/handler/read.go
+  internal/detect/size.go
+
+Narrow the pattern or scope, or Grep a listed file directly, for exact matches.
