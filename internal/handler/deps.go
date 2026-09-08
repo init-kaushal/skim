@@ -7,6 +7,7 @@ import (
 
 	"github.com/kaushal/skim/internal/config"
 	"github.com/kaushal/skim/internal/digest"
+	"github.com/kaushal/skim/internal/hookio"
 	"github.com/kaushal/skim/internal/metrics"
 	"github.com/kaushal/skim/internal/worker"
 )
@@ -25,4 +26,9 @@ type Deps struct {
 	Logf      func(format string, args ...any)                              // appends to skim.log
 	Now       func() time.Time
 	Stdout    io.Writer
+
+	// CountMatches reports how many Grep hits gi would produce and returns a
+	// capped (~32 KB) rg context dump as sample, used as the worker input.
+	// Usually backed by rg; an error (e.g. rg not installed) degrades open.
+	CountMatches func(gi hookio.GrepInput) (total int, sample string, err error)
 }

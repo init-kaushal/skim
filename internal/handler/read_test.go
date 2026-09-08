@@ -30,6 +30,9 @@ func baseDeps(t *testing.T, out *bytes.Buffer) Deps {
 		Logf:     func(string, ...any) {},
 		Now:      func() time.Time { return time.Unix(0, 0) },
 		Stdout:   out,
+		CountMatches: func(hookio.GrepInput) (int, string, error) {
+			return 0, "", errors.New("no rg")
+		},
 	}
 }
 
