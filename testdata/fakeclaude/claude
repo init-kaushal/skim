@@ -1,0 +1,39 @@
+#!/bin/sh
+# Test stand-in for the real `claude` CLI. Ignores every argument; consumes
+# the prompt on stdin. Used by internal/worker tests AND Task 14's integration
+# test, so treat the contract below as stable.
+#
+# CONTRACT
+#   FAKE_CLAUDE_MODE         ok (default) | garbage | exit1 | hang
+#   FAKE_CLAUDE_RESULT_FILE  (ok mode only) path to a file whose contents are
+#       the INNER result body: a SINGLE-LINE value. The fake JSON-string-encodes
+#       it (escaping "\" then "\"") and emits it as the .result field of the
+#       standard `claude -p --output-format json` envelope:
+#           {"type":"result","result":"<encoded file contents>"}
+#       Trailing newlines in the file are stripped by shell command
+#       substitution; the body MUST NOT contain embedded newlines (a raw
+#       newline is not legal inside a JSON string).
+#
+# MODES
+#   ok       emit the envelope above, exit 0
+#   garbage  emit non-JSON on stdout, exit 0
+#   exit1    write to stderr, exit 1
+#   hang     exec `sleep 30` (exec'd so a SIGKILL from the parent reaps it)
+cat > /dev/null   # consume the prompt on stdin
+case "${FAKE_CLAUDE_MODE:-ok}" in
+  ok)
+    payload=$(cat "${FAKE_CLAUDE_RESULT_FILE:?FAKE_CLAUDE_RESULT_FILE not set}")
+    esc=$(printf '%s' "$payload" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
+    printf '{"type":"result","result":"%s"}\n' "$esc"
+    ;;
+  garbage)
+    printf 'this is not json\n'
+    ;;
+  exit1)
+    printf 'simulated failure\n' >&2
+    exit 1
+    ;;
+  hang)
+    exec sleep 30
+    ;;
+esac
