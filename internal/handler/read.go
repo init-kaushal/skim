@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"io"
 	"os"
 	"time"
 
@@ -104,8 +105,9 @@ func ReadHook(ctx context.Context, in hookio.Input, d Deps) error {
 	return hookio.Deny(d.Stdout, reason)
 }
 
-// readCapped returns up to max bytes from the start of path. A short read is not
-// an error; an empty file with io.EOF yields "" and nil.
+// readCapped returns up to max bytes from the start of path. Files shorter than
+// max return their full contents (an empty file yields "" and nil); only an open
+// failure or a genuine read error surfaces, and the caller degrades open on it.
 func readCapped(path string, max int) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -113,10 +115,9 @@ func readCapped(path string, max int) (string, error) {
 	}
 	defer f.Close()
 
-	buf := make([]byte, max)
-	n, err := f.Read(buf)
-	if err != nil && n == 0 {
+	content, err := io.ReadAll(io.LimitReader(f, int64(max)))
+	if err != nil {
 		return "", err
 	}
-	return string(buf[:n]), nil
+	return string(content), nil
 }
