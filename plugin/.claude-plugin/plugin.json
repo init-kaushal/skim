@@ -1,0 +1,8 @@
+{
+  "name": "skim",
+  "version": "0.1.0",
+  "description": "Intercepts oversized Read/Grep/Bash tool calls and replaces their output with a compact Haiku-produced digest.",
+  "hooks": "./hooks/hooks.json",
+  "commands": "./commands",
+  "agents": "./agents"
+}

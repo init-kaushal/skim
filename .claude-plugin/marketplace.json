@@ -1,0 +1,7 @@
+{
+  "name": "skim",
+  "owner": "kaushal",
+  "plugins": [
+    { "name": "skim", "source": "./plugin", "description": "Token-saving tool-call interceptor for Claude Code." }
+  ]
+}

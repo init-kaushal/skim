@@ -1,0 +1,9 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "Read", "hooks": [ { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/skim read-hook" } ] },
+      { "matcher": "Grep", "hooks": [ { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/skim grep-hook" } ] },
+      { "matcher": "Bash", "hooks": [ { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/skim bash-hook" } ] }
+    ]
+  }
+}
