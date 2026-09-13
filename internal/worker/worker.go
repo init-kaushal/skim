@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -74,8 +75,47 @@ func Run(ctx context.Context, req Request) ([]byte, error) {
 	if err := json.Unmarshal(stdout.Bytes(), &env); err != nil {
 		return nil, fmt.Errorf("worker: bad claude envelope: %w", err)
 	}
-	if env.Result == "" {
+	result := stripCodeFence(env.Result)
+	if result == "" {
 		return nil, errors.New("worker: empty result")
 	}
-	return []byte(env.Result), nil
+	return []byte(result), nil
+}
+
+// stripCodeFence removes a wrapping markdown code fence (```json ... ``` or
+// ``` ... ```, with or without a newline separating the opening fence/language
+// tag from the body) that models sometimes add despite being asked for raw
+// JSON. Only the outer fence is touched — any triple-backtick sequence inside
+// the body is left alone. If no wrapping fence is present, s is returned
+// trimmed but otherwise unchanged. If s looks like an opening fence with no
+// matching close, s is returned unchanged (untrimmed of the fence) so the
+// caller fails to parse it and degrades open rather than this guessing.
+func stripCodeFence(s string) string {
+	s = strings.TrimSpace(s)
+	if !strings.HasPrefix(s, "```") {
+		return s
+	}
+	body := s[3:]
+
+	// Drop an optional language tag (e.g. "json") immediately following the
+	// opening fence: a run of identifier-ish characters up to the first
+	// character that can't be part of one (JSON content always begins with
+	// '{', '[', '"' or whitespace, none of which match).
+	i := 0
+	for i < len(body) && isFenceTagByte(body[i]) {
+		i++
+	}
+	body = body[i:]
+	body = strings.TrimPrefix(body, "\n")
+
+	if !strings.HasSuffix(body, "```") {
+		return s
+	}
+	body = strings.TrimSuffix(body, "```")
+	body = strings.TrimRight(body, "\n")
+	return strings.TrimSpace(body)
+}
+
+func isFenceTagByte(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '-' || b == '_'
 }
