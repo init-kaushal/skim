@@ -6,6 +6,12 @@ digest — so the main session's context (and token bill, and 5-hour/weekly
 usage limits) isn't spent absorbing raw file dumps, grep floods, and command
 output that get re-sent on every subsequent turn.
 
+> **Status:** implementation complete, a final review fix wave is in its
+> scoped re-review pass. Picking this up fresh? Read
+> [`docs/superpowers/notes/2026-09-14-handoff.md`](docs/superpowers/notes/2026-09-14-handoff.md)
+> first — it has the full status, what's pending, and every deferred
+> follow-up.
+
 ## What it does
 
 Claude Code agents spend a large share of their token budget on
@@ -76,7 +82,7 @@ worker call, so the worker's own tool use never re-enters the hooks.
 
 ```bash
 make build                                    # builds plugin/bin/skim for the host OS/arch
-claude plugin marketplace add <path-or-owner>/skim   # e.g. the repo path, or a git owner/repo
+claude plugin marketplace add init-kaushal/skim      # or a local checkout path
 claude plugin install skim@skim
 ```
 
