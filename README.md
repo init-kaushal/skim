@@ -174,8 +174,8 @@ immediately with no nested `claude -p` attempt.
   (2x), while a file just over the 300-line threshold needs to stay relevant
   for ~3 more turns before it breaks even. On a Haiku session it does not pay
   off at all. **Run `make bench FILE=<a file you actually read>` before
-  trusting this on your workload** — and note that `skim stats` reports tokens,
-  not dollars, which is not the same question (see below).
+  trusting this on your workload**, and `skim stats` for the running total across
+  a real session.
 - **Savings shrink as the session model gets cheaper.** The whole mechanic
   moves bulk content, and its re-send cost, out of the session model's
   context — the value of that scales with the session model's per-token
@@ -201,12 +201,47 @@ fence, so every digest failed to parse and every interception degraded open —
 safely, invisibly, uselessly. Only a real call catches that class of bug. Run it
 before any release.
 
-`make bench` answers the question `skim stats` cannot. `stats` sums a worker
-call's input, output, cache-write and cache-read into one token count, but those
-bill at 1x, 5x, 2x and 0.1x respectively, and against a different model than the
-session — so its "net" is not a cost. `bench` makes one real worker call, takes
-`total_cost_usd` as ground truth, and reports the turn count at which
-interception breaks even.
+`make bench` measures a single file in isolation: it makes one real worker call,
+takes `total_cost_usd` as ground truth, and reports the turn count at which
+interception breaks even. Use it to decide whether skim suits a given kind of
+file. Use `skim stats` for the running total across a real session.
+
+### Reading `skim stats`
+
+```
+  tool     intercepts   tokens saved     worker $
+  Bash              1              0       0.0000
+  Read              1            829       0.0425
+  Run               1          14892       0.0425
+
+  note    Bash only redirects; its savings and cost appear on the Run line.
+  cache   0 hit / 1 miss (0% hit rate, Read only)
+
+  assuming a opus-5 session (5.00 $/Mtok in), content surviving 10 more turns:
+    saved    ~15721 tokens  =  $0.0786 on first read, $0.1572 with re-sends
+    spent    $0.0850 actually billed by the worker (2 of 3 calls reported cost)
+    net      $+0.0722  — ahead
+```
+
+Three things are deliberate here:
+
+- **The verdict is in dollars, not tokens.** A worker call's input, output,
+  cache-write and cache-read tokens bill at 1x, 5x, 2x and 0.1x of the input
+  rate, and against a different model than the session — so subtracting a token
+  sum from tokens-saved compares quantities that share no unit. The cost figure
+  comes from the CLI's own `total_cost_usd` per call, not from a price table
+  compiled into skim, so it stays right when prices change.
+- **The session model is an assumption, and says so.** The `PreToolUse` payload
+  does not carry it, so `stats` cannot detect it. Pass `--session-model` to match
+  your setup; the verdict genuinely flips between Opus and a Haiku session.
+- **`Bash` and `Run` are separate rows.** The Bash hook only redirects — it makes
+  no worker call and saves nothing by itself. The saving and the cost both land
+  on the `Run` row, when `skim run` actually executes and digests the command.
+  A `Bash` row of zeroes is correct, not a bug.
+
+The cache row counts only `Read`, the one path with a digest cache. Counting
+Grep and Bash as misses is what previously made it read "0 hit / 4 miss (0% hit
+rate)" on one Read plus three Bash interceptions.
 
 ### What the worker is shown
 

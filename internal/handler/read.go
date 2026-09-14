@@ -90,7 +90,7 @@ func ReadHook(ctx context.Context, in hookio.Input, d Deps) error {
 
 	var fm digest.FileMap
 	hit := false
-	workerTokens := 0
+	var use worker.Usage
 	if key != "" {
 		fm, hit = d.CacheGet(key)
 	}
@@ -110,7 +110,7 @@ func ReadHook(ctx context.Context, in hookio.Input, d Deps) error {
 			d.Logf("read-hook: read %s: %v", ri.FilePath, rerr)
 			return hookio.Allow(d.Stdout)
 		}
-		raw, tokens, werr := d.Summarize(ctx, worker.Request{
+		raw, u, werr := d.Summarize(ctx, worker.Request{
 			Model:   d.Cfg.Model,
 			Kind:    worker.KindFileMap,
 			Content: content,
@@ -122,7 +122,7 @@ func ReadHook(ctx context.Context, in hookio.Input, d Deps) error {
 			d.Logf("read-hook: worker %s: %v", ri.FilePath, werr)
 			return hookio.Allow(d.Stdout)
 		}
-		workerTokens = tokens
+		use = u
 		parsed, perr := digest.ParseFileMap(raw)
 		if perr != nil {
 			d.Logf("read-hook: parse digest %s: %v", ri.FilePath, perr)
@@ -141,15 +141,19 @@ func ReadHook(ctx context.Context, in hookio.Input, d Deps) error {
 	// here would book savings for bytes that were never going to arrive.
 	origEst := metrics.EstimateTokens(sz.PrefixBytes)
 	digEst := metrics.EstimateTokens(len(reason))
-	d.Record(metrics.Entry{
+	entry := metrics.Entry{
 		TS:              d.Now().UTC().Format(time.RFC3339),
 		Tool:            "Read",
 		OrigTokensEst:   origEst,
 		DigestTokensEst: digEst,
-		WorkerTokens:    workerTokens,
-		CacheHit:        hit,
 		SavedEst:        origEst - digEst,
-	})
+		CacheHit:        metrics.Miss(),
+	}
+	if hit {
+		entry.CacheHit = metrics.Hit()
+	}
+	applyUsage(&entry, use)
+	d.Record(entry)
 	return hookio.Deny(d.Stdout, reason)
 }
 

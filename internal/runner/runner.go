@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/kaushal/skim/internal/digest"
+	"github.com/kaushal/skim/internal/metrics"
 	"github.com/kaushal/skim/internal/worker"
 )
 
@@ -25,15 +26,22 @@ import (
 // drive each branch without a real worker. It is a distinct type from
 // handler.Deps and shares nothing with it.
 type Deps struct {
-	// Summarize returns the raw digest JSON and the tokens the call billed.
-	// Usually worker.Run; the token count is unused here (only hook
-	// interceptions are metered) but keeps one signature across both callers.
-	Summarize  func(ctx context.Context, req worker.Request) ([]byte, int, error)
+	// Summarize returns the raw digest JSON and what the call billed.
+	// Usually worker.Run.
+	Summarize  func(ctx context.Context, req worker.Request) ([]byte, worker.Usage, error)
 	Model      string
 	TimeoutSec int
 	Now        func() time.Time
 	Stdout     io.Writer
 	RunsDir    string
+
+	// Record logs one interception to the metrics ledger. `skim run` is where
+	// the Bash path's tokens are actually saved and its worker cost actually
+	// incurred, so without this the entire Bash side of `skim stats` was blank:
+	// the bash-hook's own entry carries only a timestamp. Usually
+	// func(e){ _ = metrics.Record(e) }; a nil Record is tolerated so callers
+	// that only want the digest need not wire it.
+	Record func(metrics.Entry)
 }
 
 // tailCap bounds the ring buffer that feeds the worker: the last ~16 KB of
@@ -91,12 +99,18 @@ func Run(ctx context.Context, argv []string, d Deps) error {
 		timeout = time.Duration(d.TimeoutSec) * time.Second
 	}
 
-	raw, _, werr := d.Summarize(ctx, worker.Request{
+	// full is everything the command emitted; tail is only the last tailCap of
+	// it. Both matter: full is the baseline the saving is measured against,
+	// tail is what the worker actually sees.
+	full := ring.Total()
+
+	raw, use, werr := d.Summarize(ctx, worker.Request{
 		Model:   d.Model,
 		Kind:    worker.KindRun,
 		Content: tail,
 		Meta:    strings.Join(argv, " "),
 		Timeout: timeout,
+		Partial: full > len(tail),
 	})
 	if werr != nil {
 		fallback()
@@ -111,26 +125,77 @@ func Run(ctx context.Context, argv []string, d Deps) error {
 
 	r.LogPath = logPath
 	r.ExitCode = exit
-	fmt.Fprint(d.Stdout, digest.RenderRun(r))
+	// Tell the model when the digest only saw the tail. Without this the digest
+	// read as a summary of the whole run: `cat`ing a large file through
+	// `skim run` described only its final 16KB, with nothing saying so.
+	out := digest.RenderRun(r, digest.Coverage{
+		SeenBytes: len(tail), TotalBytes: full,
+	})
+	fmt.Fprint(d.Stdout, out)
+	d.record(full, len(out), use)
 	return nil
 }
 
-// ringBuffer is a byte sink that retains only the last cap bytes written to it.
-// It is written from a single goroutine (the os/exec output pump) so it needs no
-// locking.
+// record writes this run's entry to the metrics ledger. origBytes is everything
+// the command emitted — the honest baseline, since that is what would have gone
+// into the context had the Bash call been allowed through.
+//
+// Caveat worth knowing when reading `skim stats`: Claude Code's Bash tool
+// truncates very long output by an amount skim does not model, so for enormous
+// output this baseline is an upper bound rather than an exact counterfactual.
+// It is still far better than the previous behaviour, which recorded nothing at
+// all and left the Bash path's savings and cost entirely invisible.
+func (d Deps) record(origBytes, digestBytes int, use worker.Usage) {
+	if d.Record == nil {
+		return
+	}
+	now := time.Now
+	if d.Now != nil {
+		now = d.Now
+	}
+	origEst := metrics.EstimateTokens(origBytes)
+	digEst := metrics.EstimateTokens(digestBytes)
+	e := metrics.Entry{
+		TS:              now().UTC().Format(time.RFC3339),
+		Tool:            "Run",
+		OrigTokensEst:   origEst,
+		DigestTokensEst: digEst,
+		SavedEst:        origEst - digEst,
+		// CacheHit stays nil: `skim run` has no digest cache — the same command
+		// run twice can legitimately produce different output.
+		WorkerTokens:           use.Tokens(),
+		WorkerInputTokens:      use.InputTokens,
+		WorkerOutputTokens:     use.OutputTokens,
+		WorkerCacheWriteTokens: use.CacheWriteTokens,
+		WorkerCacheReadTokens:  use.CacheReadTokens,
+		WorkerCostUSD:          use.CostUSD,
+	}
+	d.Record(e)
+}
+
+// ringBuffer is a byte sink that retains only the last cap bytes written to it,
+// while counting every byte that passes through. It is written from a single
+// goroutine (the os/exec output pump) so it needs no locking.
 type ringBuffer struct {
-	cap int
-	buf []byte
+	cap   int
+	buf   []byte
+	total int
 }
 
 // Write appends p and trims the buffer back down to the last cap bytes. It never
 // reports a short write, so it is safe as one leg of an io.MultiWriter.
 func (r *ringBuffer) Write(p []byte) (int, error) {
+	r.total += len(p)
 	r.buf = append(r.buf, p...)
 	if len(r.buf) > r.cap {
 		r.buf = r.buf[len(r.buf)-r.cap:]
 	}
 	return len(p), nil
 }
+
+// Total is every byte the command emitted, including what the ring dropped.
+// Counted here rather than stat'ed off the log file so it needs no syscall and
+// makes no assumption about when the log's writes have landed.
+func (r *ringBuffer) Total() int { return r.total }
 
 func (r *ringBuffer) String() string { return string(r.buf) }

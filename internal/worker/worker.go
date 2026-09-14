@@ -39,6 +39,32 @@ type Request struct {
 	Partial bool
 }
 
+// Usage is what one worker call billed. The four token counts are kept apart
+// rather than summed because they are priced differently — on Haiku 4.5,
+// measured against the CLI's own reported cost, a 1-hour cache write bills at
+// 2.0x the input rate, a cache read at 0.1x, and output at 5x. Adding them into
+// a single "tokens" figure and subtracting it from tokens-saved, as skim did
+// originally, compares quantities that are not in the same unit.
+//
+// CostUSD is the authoritative figure and the one `skim stats` reports. It is
+// taken from the CLI's own `total_cost_usd`, deliberately not derived from a
+// price table compiled into skim: prices change, and the CLI already knows the
+// real number for whatever model and auth mode is in play.
+type Usage struct {
+	InputTokens      int
+	OutputTokens     int
+	CacheWriteTokens int
+	CacheReadTokens  int
+	CostUSD          float64
+}
+
+// Tokens is the flat sum of every billed token variant. It is a diagnostic for
+// sizing a call, NOT a cost — use CostUSD for anything that compares against a
+// saving.
+func (u Usage) Tokens() int {
+	return u.InputTokens + u.OutputTokens + u.CacheWriteTokens + u.CacheReadTokens
+}
+
 // ErrTimeout is returned (wrapped) when the nested claude call exceeds the
 // deadline. Callers should test with errors.Is(err, ErrTimeout).
 var ErrTimeout = errors.New("worker: timed out")
@@ -46,9 +72,9 @@ var ErrTimeout = errors.New("worker: timed out")
 // Run execs `claude -p --model <Model> --output-format json --max-turns 1
 // --tools ""`, feeds it promptFor(req) on stdin with SKIM_ACTIVE=1 added to the
 // child env, and parses the `{"result": "<string>", "usage": {…}}` envelope
-// from stdout. It returns the inner result string as bytes plus the total
-// tokens the worker call billed, so `skim stats` can weigh the cost of the
-// digest against what it kept out of the main context.
+// from stdout. It returns the inner result string as bytes plus what the call
+// billed, so `skim stats` can weigh the cost of the digest against what it kept
+// out of the main context.
 //
 // `--tools ""` disables every built-in tool, which spec §4.4 requires (the
 // worker summarises text; it has no business touching the filesystem) and which
@@ -58,8 +84,9 @@ var ErrTimeout = errors.New("worker: timed out")
 // A timeout yields an error satisfying errors.Is(err, ErrTimeout); a non-zero
 // exit yields an error including stderr; an unparseable or empty envelope
 // yields an error. A missing or unparseable `usage` block is NOT an error — the
-// token count is a stats nicety and degrades to 0 rather than failing the call.
-func Run(ctx context.Context, req Request) (result []byte, workerTokens int, err error) {
+// accounting is a stats nicety and degrades to a zero Usage rather than failing
+// the call.
+func Run(ctx context.Context, req Request) (result []byte, u Usage, err error) {
 	if req.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, req.Timeout)
@@ -92,15 +119,18 @@ func Run(ctx context.Context, req Request) (result []byte, workerTokens int, err
 
 	runErr := cmd.Run()
 	if ctx.Err() == context.DeadlineExceeded {
-		return nil, 0, fmt.Errorf("%w after %s", ErrTimeout, req.Timeout)
+		return nil, Usage{}, fmt.Errorf("%w after %s", ErrTimeout, req.Timeout)
 	}
 	if runErr != nil {
-		return nil, 0, fmt.Errorf("worker: claude failed: %w (stderr: %s)", runErr, stderr.String())
+		return nil, Usage{}, fmt.Errorf("worker: claude failed: %w (stderr: %s)", runErr, stderr.String())
 	}
 
 	var env struct {
 		Result string `json:"result"`
-		Usage  struct {
+		// The CLI reports the real dollar cost of the call; prefer it over
+		// anything skim could compute from token counts and a stale price list.
+		TotalCostUSD float64 `json:"total_cost_usd"`
+		Usage        struct {
 			InputTokens              int `json:"input_tokens"`
 			OutputTokens             int `json:"output_tokens"`
 			CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
@@ -108,18 +138,22 @@ func Run(ctx context.Context, req Request) (result []byte, workerTokens int, err
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &env); err != nil {
-		return nil, 0, fmt.Errorf("worker: bad claude envelope: %w", err)
+		return nil, Usage{}, fmt.Errorf("worker: bad claude envelope: %w", err)
 	}
 
-	// Every input variant is billed, so all of them count against the saving.
-	u := env.Usage
-	tokens := u.InputTokens + u.OutputTokens + u.CacheCreationInputTokens + u.CacheReadInputTokens
+	use := Usage{
+		InputTokens:      env.Usage.InputTokens,
+		OutputTokens:     env.Usage.OutputTokens,
+		CacheWriteTokens: env.Usage.CacheCreationInputTokens,
+		CacheReadTokens:  env.Usage.CacheReadInputTokens,
+		CostUSD:          env.TotalCostUSD,
+	}
 
 	body := stripCodeFence(env.Result)
 	if body == "" {
-		return nil, tokens, errors.New("worker: empty result")
+		return nil, use, errors.New("worker: empty result")
 	}
-	return []byte(body), tokens, nil
+	return []byte(body), use, nil
 }
 
 // stripCodeFence removes a wrapping markdown code fence (```json ... ``` or

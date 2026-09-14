@@ -43,7 +43,11 @@ MATCHES:
 %s`, req.Meta, req.Content)
 
 	case KindRun:
-		return fmt.Sprintf(`You are a command-output summariser. Below is the tail of output from: %s
+		scope := "the complete output"
+		if req.Partial {
+			scope = "the TAIL ONLY (earlier output was dropped) of the output"
+		}
+		return fmt.Sprintf(`You are a command-output summariser. Below is %s from: %s
 Return ONLY a JSON object, no prose:
 {"summary": "<1-3 sentence outcome>",
  "key_lines": ["<the few lines that matter: errors, failures, totals>"],
@@ -51,7 +55,7 @@ Return ONLY a JSON object, no prose:
  "log_path": ""}
 
 OUTPUT:
-%s`, req.Meta, req.Content)
+%s`, scope, req.Meta, req.Content)
 	}
 	return req.Content
 }

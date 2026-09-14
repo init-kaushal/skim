@@ -34,8 +34,8 @@ func baseDeps(t *testing.T, out *bytes.Buffer) Deps {
 		CountMatches: func(hookio.GrepInput) (int, error) {
 			return 0, errors.New("no rg")
 		},
-		Sample: func(hookio.GrepInput) (string, error) {
-			return "", errors.New("no rg")
+		Sample: func(hookio.GrepInput) (string, int, error) {
+			return "", 0, errors.New("no rg")
 		},
 	}
 }
@@ -82,8 +82,8 @@ func TestReadHook_LargeFile_DeniesWithDigest(t *testing.T) {
 	var recorded []metrics.Entry
 	d := baseDeps(t, &out)
 	captureEntry(&d, &recorded)
-	d.Summarize = func(_ context.Context, _ worker.Request) ([]byte, int, error) {
-		return []byte(`{"summary":"big file","map":[{"lines":"1-5000","kind":"x lines"}]}`), 777, nil
+	d.Summarize = func(_ context.Context, _ worker.Request) ([]byte, worker.Usage, error) {
+		return []byte(`{"summary":"big file","map":[{"lines":"1-5000","kind":"x lines"}]}`), worker.Usage{InputTokens: 777, CostUSD: 0.002}, nil
 	}
 	if err := ReadHook(context.Background(), readInput(t, f, 0, 0), d); err != nil {
 		t.Fatal(err)
@@ -102,11 +102,18 @@ func TestReadHook_LargeFile_DeniesWithDigest(t *testing.T) {
 	if e.Tool != "Read" {
 		t.Errorf("Tool = %q, want Read", e.Tool)
 	}
-	if e.CacheHit {
+	// Non-nil false: Read does consult the cache, so it reports a real miss
+	// rather than the nil that means "no cache on this path".
+	if e.CacheHit == nil {
+		t.Error("CacheHit = nil, want a recorded miss (Read does use the cache)")
+	} else if *e.CacheHit {
 		t.Error("CacheHit = true, want false (baseDeps CacheGet always misses)")
 	}
 	if e.WorkerTokens != 777 {
 		t.Errorf("WorkerTokens = %d, want 777 (what the worker reported)", e.WorkerTokens)
+	}
+	if e.WorkerCostUSD != 0.002 {
+		t.Errorf("WorkerCostUSD = %v, want 0.002", e.WorkerCostUSD)
 	}
 	if e.OrigTokensEst <= e.DigestTokensEst {
 		t.Errorf("digest should be smaller than the original: orig=%d digest=%d",
@@ -134,9 +141,9 @@ func TestReadHook_BinaryFile_Allows(t *testing.T) {
 			}
 			var out bytes.Buffer
 			d := baseDeps(t, &out)
-			d.Summarize = func(_ context.Context, _ worker.Request) ([]byte, int, error) {
+			d.Summarize = func(_ context.Context, _ worker.Request) ([]byte, worker.Usage, error) {
 				t.Fatal("worker must not be called for a binary file")
-				return nil, 0, nil
+				return nil, worker.Usage{}, nil
 			}
 			if err := ReadHook(context.Background(), readInput(t, f, 0, 0), d); err != nil {
 				t.Fatal(err)
@@ -155,8 +162,8 @@ func TestReadHook_WorkerFails_DegradesOpen(t *testing.T) {
 
 	var out bytes.Buffer
 	d := baseDeps(t, &out)
-	d.Summarize = func(_ context.Context, _ worker.Request) ([]byte, int, error) {
-		return nil, 0, errors.New("boom")
+	d.Summarize = func(_ context.Context, _ worker.Request) ([]byte, worker.Usage, error) {
+		return nil, worker.Usage{}, errors.New("boom")
 	}
 	if err := ReadHook(context.Background(), readInput(t, f, 0, 0), d); err != nil {
 		t.Fatal(err)
@@ -172,9 +179,9 @@ func TestReadHook_OffsetPresent_Allows(t *testing.T) {
 	os.WriteFile(f, []byte(strings.Repeat("x\n", 5000)), 0o644)
 	var out bytes.Buffer
 	d := baseDeps(t, &out)
-	d.Summarize = func(_ context.Context, _ worker.Request) ([]byte, int, error) {
+	d.Summarize = func(_ context.Context, _ worker.Request) ([]byte, worker.Usage, error) {
 		t.Fatal("summarize must not be called when offset/limit present")
-		return nil, 0, nil
+		return nil, worker.Usage{}, nil
 	}
 	if err := ReadHook(context.Background(), readInput(t, f, 10, 50), d); err != nil {
 		t.Fatal(err)
@@ -220,8 +227,8 @@ func readDenyReason(t *testing.T, path string) string {
 	t.Helper()
 	var out bytes.Buffer
 	d := baseDeps(t, &out)
-	d.Summarize = func(_ context.Context, _ worker.Request) ([]byte, int, error) {
-		return []byte(`{"summary":"large file","map":[{"lines":"1-5000","kind":"code"}]}`), 777, nil
+	d.Summarize = func(_ context.Context, _ worker.Request) ([]byte, worker.Usage, error) {
+		return []byte(`{"summary":"large file","map":[{"lines":"1-5000","kind":"code"}]}`), worker.Usage{InputTokens: 777, CostUSD: 0.002}, nil
 	}
 	if err := ReadHook(context.Background(), readInput(t, path, 0, 0), d); err != nil {
 		t.Fatal(err)
@@ -306,9 +313,9 @@ func TestReadHook_LongFile_CapsWorkerInputAndDiscloses(t *testing.T) {
 	captureEntry(&d, &entries)
 
 	var gotReq worker.Request
-	d.Summarize = func(_ context.Context, req worker.Request) ([]byte, int, error) {
+	d.Summarize = func(_ context.Context, req worker.Request) ([]byte, worker.Usage, error) {
 		gotReq = req
-		return []byte(`{"summary":"long file","map":[{"lines":"1-2000","kind":"lines"}]}`), 7, nil
+		return []byte(`{"summary":"long file","map":[{"lines":"1-2000","kind":"lines"}]}`), worker.Usage{InputTokens: 7, CostUSD: 0.002}, nil
 	}
 
 	if err := ReadHook(context.Background(), readInput(t, path, 0, 0), d); err != nil {
@@ -379,9 +386,9 @@ func TestReadHook_ShortFile_NoPartialBanner(t *testing.T) {
 	var out bytes.Buffer
 	d := baseDeps(t, &out)
 	var gotReq worker.Request
-	d.Summarize = func(_ context.Context, req worker.Request) ([]byte, int, error) {
+	d.Summarize = func(_ context.Context, req worker.Request) ([]byte, worker.Usage, error) {
 		gotReq = req
-		return []byte(`{"summary":"mid","map":[{"lines":"1-500","kind":"lines"}]}`), 3, nil
+		return []byte(`{"summary":"mid","map":[{"lines":"1-500","kind":"lines"}]}`), worker.Usage{InputTokens: 3, CostUSD: 0.002}, nil
 	}
 
 	if err := ReadHook(context.Background(), readInput(t, path, 0, 0), d); err != nil {

@@ -162,5 +162,6 @@ func TestRenderClusters(t *testing.T) {
 
 func TestRenderRun(t *testing.T) {
 	r := Run{Summary: "2 tests failed, 44 passed.", KeyLines: []string{"FAIL TestApply/oversize", "2 failed, 44 passed"}, ExitCode: 1, LogPath: "/home/u/.claude/skim/runs/abc123.log"}
-	checkGolden(t, "run", RenderRun(r))
+	// Whole output captured: no PARTIAL banner, so the golden is unchanged.
+	checkGolden(t, "run", RenderRun(r, Coverage{SeenBytes: 512, TotalBytes: 512}))
 }

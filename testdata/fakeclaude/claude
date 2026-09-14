@@ -18,6 +18,11 @@
 #   ok       emit the envelope above, exit 0
 #   usage    like ok, plus a `usage` block with fixed token counts
 #            (input 11 + output 22 + cache_creation 33 + cache_read 44 = 110)
+#            and a fixed total_cost_usd of 0.0425. The cost field is what
+#            `skim stats` reports, so it has to be exercisable without a real
+#            API call — the four token counts are priced differently and cannot
+#            be summed into one, which is why the real number is carried rather
+#            than recomputed.
 #   garbage  emit non-JSON on stdout, exit 0
 #   exit1    write to stderr, exit 1
 #   hang     exec `sleep 30` (exec'd so a SIGKILL from the parent reaps it)
@@ -31,7 +36,7 @@ case "${FAKE_CLAUDE_MODE:-ok}" in
   usage)
     payload=$(cat "${FAKE_CLAUDE_RESULT_FILE:?FAKE_CLAUDE_RESULT_FILE not set}")
     esc=$(printf '%s' "$payload" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
-    printf '{"type":"result","result":"%s","usage":{"input_tokens":11,"output_tokens":22,"cache_creation_input_tokens":33,"cache_read_input_tokens":44}}\n' "$esc"
+    printf '{"type":"result","result":"%s","total_cost_usd":0.0425,"usage":{"input_tokens":11,"output_tokens":22,"cache_creation_input_tokens":33,"cache_read_input_tokens":44}}\n' "$esc"
     ;;
   garbage)
     printf 'this is not json\n'

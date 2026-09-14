@@ -56,6 +56,11 @@ func BashHook(_ context.Context, in hookio.Input, d Deps) error {
 			"Re-run it through skim so the full output is captured to a log and you get a digest:\n\n"+
 			"  %s\n", pat, suggestion)
 
+	// This hook only redirects; it makes no worker call and saves nothing by
+	// itself. The tokens are actually saved (and the worker cost actually
+	// incurred) later, by `skim run`, which records its own "Run" entry. So
+	// this entry carries counts of zero deliberately — and a nil CacheHit,
+	// because there is no cache on this path to hit or miss.
 	d.Record(metrics.Entry{
 		TS:   d.Now().UTC().Format(time.RFC3339),
 		Tool: "Bash",

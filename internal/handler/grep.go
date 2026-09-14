@@ -50,19 +50,21 @@ func GrepHook(ctx context.Context, in hookio.Input, d Deps) error {
 		return hookio.Allow(d.Stdout)
 	}
 
-	// Only now is a sample worth its own rg pass.
-	sample, err := d.Sample(gi)
+	// Only now is a sample worth its own rg pass. fullBytes is how much the
+	// match output ran to before skim capped it for the prompt.
+	sample, fullBytes, err := d.Sample(gi)
 	if err != nil {
 		d.Logf("grep-hook: sample: %v", err)
 		return hookio.Allow(d.Stdout)
 	}
 
-	raw, workerTokens, err := d.Summarize(ctx, worker.Request{
+	raw, use, err := d.Summarize(ctx, worker.Request{
 		Model:   d.Cfg.Model,
 		Kind:    worker.KindClusters,
 		Content: sample,
 		Meta:    gi.Pattern,
 		Timeout: time.Duration(d.Cfg.WorkerTimeoutSec) * time.Second,
+		Partial: fullBytes > len(sample),
 	})
 	if err != nil {
 		d.Logf("grep-hook: worker: %v", err)
@@ -76,16 +78,21 @@ func GrepHook(ctx context.Context, in hookio.Input, d Deps) error {
 	}
 
 	reason := digest.RenderClusters(cl)
-	origEst := metrics.EstimateTokens(len(sample))
+	// Measured against the full match output, not against `sample`. sample is
+	// skim's own capped prompt input, so using it booked "savings" for shrinking
+	// skim's prompt rather than the tool result the model would have received.
+	origEst := metrics.EstimateTokens(fullBytes)
 	digEst := metrics.EstimateTokens(len(reason))
-	d.Record(metrics.Entry{
+	entry := metrics.Entry{
 		TS:              d.Now().UTC().Format(time.RFC3339),
 		Tool:            "Grep",
 		OrigTokensEst:   origEst,
 		DigestTokensEst: digEst,
-		WorkerTokens:    workerTokens,
-		CacheHit:        false,
 		SavedEst:        origEst - digEst,
-	})
+		// CacheHit stays nil: the Grep path has no digest cache, and reporting
+		// it as a miss is what made the cache hit rate meaningless.
+	}
+	applyUsage(&entry, use)
+	d.Record(entry)
 	return hookio.Deny(d.Stdout, reason)
 }

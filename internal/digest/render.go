@@ -112,10 +112,19 @@ func RenderClusters(c Clusters) string {
 	return b.String()
 }
 
-func RenderRun(r Run) string {
+// RenderRun formats a command-output digest. cov says how much of the output
+// backed it: the runner keeps only a bounded tail in memory, so on a noisy
+// command the digest describes the end of the stream and must say so — the full
+// stream is on disk at r.LogPath either way.
+func RenderRun(r Run, cov Coverage) string {
 	var b strings.Builder
 	b.WriteString(framing)
 	fmt.Fprintf(&b, "skim: command output captured (exit %d).\n\n", r.ExitCode)
+	if cov.Partial() {
+		fmt.Fprintf(&b, "PARTIAL: %d bytes of output were captured; this digest summarises\n"+
+			"only the LAST %d bytes. Earlier output is in the log, not below.\n\n",
+			cov.TotalBytes, cov.SeenBytes)
+	}
 	fmt.Fprintf(&b, "%s\n", r.Summary)
 	if len(r.KeyLines) > 0 {
 		b.WriteString("\nKey lines:\n")

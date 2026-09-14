@@ -64,15 +64,27 @@ func TestRun_GarbageEnvelope_Errors(t *testing.T) {
 func TestRun_ReportsUsageTokens(t *testing.T) {
 	withFakeClaude(t, "usage", `{"summary":"ok","map":[{"lines":"1-2","kind":"x"}]}`)
 
-	_, tokens, err := Run(context.Background(), Request{
+	_, use, err := Run(context.Background(), Request{
 		Model: "m", Kind: KindFileMap, Timeout: 5 * time.Second,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	// The fake reports input 11 + output 22 + cache_creation 33 + cache_read 44.
-	if tokens != 110 {
-		t.Fatalf("workerTokens = %d, want 110", tokens)
+	// Each is kept separately now, because they bill at different rates: summing
+	// them and subtracting from tokens-saved compared unlike units.
+	if use.InputTokens != 11 || use.OutputTokens != 22 ||
+		use.CacheWriteTokens != 33 || use.CacheReadTokens != 44 {
+		t.Fatalf("per-tier usage = %+v, want 11/22/33/44", use)
+	}
+	if use.Tokens() != 110 {
+		t.Fatalf("Tokens() = %d, want 110", use.Tokens())
+	}
+	// The dollar figure is taken from the CLI rather than computed from the
+	// counts above, so that a price change upstream cannot silently make skim's
+	// reported cost wrong.
+	if use.CostUSD != 0.0425 {
+		t.Fatalf("CostUSD = %v, want 0.0425 (the fake's total_cost_usd)", use.CostUSD)
 	}
 }
 
@@ -82,14 +94,14 @@ func TestRun_ReportsUsageTokens(t *testing.T) {
 func TestRun_MissingUsage_TokensZeroNotError(t *testing.T) {
 	withFakeClaude(t, "ok", `{"summary":"ok","map":[{"lines":"1-2","kind":"x"}]}`)
 
-	_, tokens, err := Run(context.Background(), Request{
+	_, use, err := Run(context.Background(), Request{
 		Model: "m", Kind: KindFileMap, Timeout: 5 * time.Second,
 	})
 	if err != nil {
 		t.Fatalf("missing usage must not error: %v", err)
 	}
-	if tokens != 0 {
-		t.Fatalf("workerTokens = %d, want 0", tokens)
+	if use.Tokens() != 0 || use.CostUSD != 0 {
+		t.Fatalf("usage = %+v, want zero", use)
 	}
 }
 

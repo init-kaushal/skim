@@ -74,6 +74,7 @@ func runWithStdin(stdin io.Reader, args []string, stdout, stderr io.Writer) int 
 			Now:        time.Now,
 			Stdout:     stdout,
 			RunsDir:    paths.RunsDir(),
+			Record:     func(e metrics.Entry) { _ = metrics.Record(e) },
 		}
 		if err := runner.Run(context.Background(), rest[1:], d); err != nil {
 			fmt.Fprintln(stderr, err)
@@ -96,7 +97,7 @@ func runWithStdin(stdin io.Reader, args []string, stdout, stderr io.Writer) int 
 		return cli.Doctor(stdout, exec.LookPath)
 
 	case "stats":
-		if err := cli.Stats(stdout); err != nil {
+		if err := cli.Stats(stdout, args[1:]); err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
@@ -260,20 +261,24 @@ func rgCount(gi hookio.GrepInput) (int, error) {
 //
 //	rg -n -C1 --no-heading --no-messages --color never [scope] -- <pattern> [path]
 //
-// capped at 32 KB, and is called only for a Grep that already cleared the
-// threshold. Errors are returned (not swallowed) so a failed sample degrades
-// open rather than feeding the worker an empty prompt.
-func rgSample(gi hookio.GrepInput) (string, error) {
+// and is called only for a Grep that already cleared the threshold. It returns
+// the output capped at 32 KB for the worker prompt, plus the UNCAPPED byte
+// length — the latter is what the Grep would have put in the session's context,
+// and therefore the only honest baseline for the saving. Errors are returned
+// (not swallowed) so a failed sample degrades open rather than feeding the
+// worker an empty prompt.
+func rgSample(gi hookio.GrepInput) (string, int, error) {
 	out, err := exec.Command("rg", rgArgs(gi,
 		"-n", "-C1", "--no-heading", "--no-messages", "--color", "never")...).Output()
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() == 1 {
-			return "", nil // rg: no matches
+			return "", 0, nil // rg: no matches
 		}
-		return "", err
+		return "", 0, err
 	}
+	full := len(out)
 	if len(out) > sampleCap {
 		out = out[:sampleCap]
 	}
-	return string(out), nil
+	return string(out), full, nil
 }
