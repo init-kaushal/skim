@@ -8,6 +8,7 @@ import (
 
 	"github.com/kaushal/skim/internal/config"
 	"github.com/kaushal/skim/internal/paths"
+	"github.com/kaushal/skim/internal/rg"
 )
 
 // Doctor runs environment and configuration checks, writing a human-readable
@@ -26,10 +27,26 @@ func Doctor(w io.Writer, lookPath func(string) (string, error)) int {
 	} else {
 		ok("claude: %s", p)
 	}
-	if p, err := lookPath("rg"); err != nil {
-		warn("`rg` (ripgrep) not found — Grep interception will pass through")
+	// Reported through rg.Path, not a bare lookPath("rg"), because a missing
+	// standalone ripgrep is not the same thing as no ripgrep. Claude Code ships
+	// ripgrep inside its own binary, and skim falls back to it — so checking
+	// only for an `rg` executable printed a warning about Grep interception
+	// passing through on machines where it works fine.
+	if p, argv0, rerr := rg.Path(); rerr != nil {
+		warn("ripgrep unavailable (%v) — Grep interception will pass through", rerr)
 	} else {
-		ok("rg: %s", p)
+		via := p
+		if argv0 == "rg" && p != "rg" {
+			via = p + " (via the claude binary; no standalone rg on PATH)"
+		}
+		// Probe it, because the fallback assumes a binary named `claude` is
+		// Claude Code and therefore ripgrep. If it is not, match counts come
+		// back quietly wrong rather than failing.
+		if ver, verr := rg.Verify(); verr != nil {
+			warn("ripgrep at %s is not usable: %v", via, verr)
+		} else {
+			ok("ripgrep: %s — %s", via, ver)
+		}
 	}
 
 	c, err := config.Load()

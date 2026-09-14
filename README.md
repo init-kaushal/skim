@@ -120,7 +120,7 @@ run:
 | `disabled` | `false` | Master kill switch — toggled by `/skim off` / `/skim on`. |
 | `read_max_lines` | `300` | Files at or under this line count pass through `Read` uninterrupted. |
 | `read_max_bytes` | `60000` | Files at or under this byte size pass through `Read` uninterrupted. |
-| `grep_max_matches` | `60` | Grep results at or under this match count pass through uninterrupted. |
+| `grep_max_matches` | `60` | Grep results at or under this many *matching lines* pass through uninterrupted. Counted with `rg --count` (lines), matching what Grep returns in content mode — not `--count-matches` (occurrences), which over-counted any line containing more than one hit. |
 | `bash_noisy_patterns` | `["\\bcat\\s", "\\bcurl\\s", "\\btail\\s+-n\\s+\\d{3,}", "npm\\s+(run\\s+)?test", "jest", "pytest", "go\\s+test"]` | Regexes matched against the `Bash` command string; a match redirects to `skim run --`. |
 | `passthrough_globs` | `["**/*.md", "**/go.mod", ".claude/**"]` | Paths that always skip interception, regardless of size. |
 | `model` | `claude-haiku-4-5-20251001` | Model passed explicitly (`--model`) to every worker call — never inherited from the session model. |
@@ -163,9 +163,16 @@ immediately with no nested `claude -p` attempt.
   you rely on narrow Bash allow/deny rules, they will see the `skim run …`
   form — write your rules accordingly, or run `/skim off` in sessions where
   exact Bash matching matters.
-- **`Grep` interception needs `rg` (ripgrep) on `PATH`.** The hook shells out
-  to ripgrep itself to count matches before deciding whether to intercept;
-  without it, grep interception can't determine whether a result is large.
+- **`Grep` interception needs ripgrep, but almost certainly already has it.**
+  The hook shells out to ripgrep to count matches before deciding whether to
+  intercept. It prefers a standalone `rg` on `PATH` and otherwise falls back to
+  Claude Code's own binary, which *is* ripgrep 14.1.1 when invoked with
+  `argv[0]` set to `rg`. That fallback is load-bearing: a normal Claude Code
+  install has no `rg` executable at all — on some setups `rg` is a shell
+  *function* that re-execs `claude`, and a shell function is invisible to an
+  exec PATH lookup. Without the fallback, Grep interception silently never ran.
+  `skim doctor` reports which route it resolved and probes it to confirm it
+  really is ripgrep.
 - **Whether it saves money depends on the session model, and it is close.**
   The worker is cheap per token but not free, and it reads content to compress
   it — so the trade is a ratio, not a given. Haiku input is 5x cheaper than

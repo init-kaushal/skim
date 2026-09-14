@@ -31,6 +31,19 @@ type BashInput struct {
 	Command string `json:"command"`
 }
 
+// GrepInput mirrors the Grep tool's parameters. The hyphenated key names are
+// not a typo — they are literally what Claude Code puts on the hook's stdin,
+// confirmed by capturing real PreToolUse payloads from a live session:
+//
+//	{"pattern":"todo","path":".","output_mode":"content","-i":true,"-A":2}
+//	{"pattern":"func","path":".","output_mode":"content","-B":1,"head_limit":5}
+//	{"pattern":"type .* struct","path":".","output_mode":"content","multiline":true}
+//
+// Every field that changes the result set has to be parsed, or skim decides
+// whether to intercept by running a *different query* than the one the model
+// asked for: ignoring `-i` on a case-insensitive search under-counted matches
+// 3-to-1 in a direct test, so a call that warranted interception passed
+// straight through (and the reverse for patterns that only match one case).
 type GrepInput struct {
 	Pattern    string `json:"pattern"`
 	Path       string `json:"path"`
@@ -39,6 +52,22 @@ type GrepInput struct {
 	Type       string `json:"type"`
 	// HeadLimit is Grep's own cap on returned lines. Absent means unbounded.
 	HeadLimit int `json:"head_limit"`
+
+	// CaseInsensitive and Multiline change which lines match at all, so they
+	// must reach the counting pass.
+	CaseInsensitive bool `json:"-i"`
+	Multiline       bool `json:"multiline"`
+
+	// After, Before and Context add surrounding lines. They do not change the
+	// match count, but they do change how much output the call would have
+	// returned — which is the baseline the saving is measured against.
+	After   int `json:"-A"`
+	Before  int `json:"-B"`
+	Context int `json:"-C"`
+
+	// LineNumbers only affects formatting, and is parsed so the sample pass can
+	// reproduce the call's real output size.
+	LineNumbers bool `json:"-n"`
 }
 
 func (i Input) Read() (ReadInput, error) {

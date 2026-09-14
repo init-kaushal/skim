@@ -16,6 +16,7 @@ import (
 	"github.com/kaushal/skim/internal/hookio"
 	"github.com/kaushal/skim/internal/metrics"
 	"github.com/kaushal/skim/internal/paths"
+	"github.com/kaushal/skim/internal/rg"
 	"github.com/kaushal/skim/internal/runner"
 	"github.com/kaushal/skim/internal/worker"
 )
@@ -176,8 +177,8 @@ func hookMain(stdin io.Reader, stdout io.Writer, fn hookFn) int {
 		Logf:         logf,
 		Now:          time.Now,
 		Stdout:       stdout,
-		CountMatches: rgCount,
-		Sample:       rgSample,
+		CountMatches: rg.Count,
+		Sample:       rg.Sample,
 	}
 	_ = fn(context.Background(), in, d)
 	return 0
@@ -194,91 +195,4 @@ func loadConfigOrDefault(logf func(string, ...any)) config.Config {
 		return config.Default()
 	}
 	return cfg
-}
-
-// sampleCap bounds the rg context dump fed to the worker as the Grep sample.
-const sampleCap = 32768
-
-// rgScope returns the args that restrict an rg invocation to the scope the
-// model asked for. Both the count and the sample must use it, or the digest can
-// describe files the Grep call never would have returned.
-func rgScope(gi hookio.GrepInput) []string {
-	var a []string
-	if gi.Glob != "" {
-		a = append(a, "--glob", gi.Glob)
-	}
-	if gi.Type != "" {
-		a = append(a, "--type", gi.Type)
-	}
-	return a
-}
-
-// rgArgs builds a full rg command line: the given mode flags, the shared scope,
-// then the pattern and optional path after `--`.
-func rgArgs(gi hookio.GrepInput, mode ...string) []string {
-	args := append([]string{}, mode...)
-	args = append(args, rgScope(gi)...)
-	args = append(args, "--", gi.Pattern)
-	if gi.Path != "" {
-		args = append(args, gi.Path)
-	}
-	return args
-}
-
-// rgCount backs handler.Deps.CountMatches. It runs
-//
-//	rg --count-matches --no-heading --no-messages --color never [scope] -- <pattern> [path]
-//
-// and sums the per-file `path:N` counts. rg exit code 1 (no matches) is not an
-// error; any other failure (rg missing, bad regex) is returned so the hook
-// degrades open.
-func rgCount(gi hookio.GrepInput) (int, error) {
-	out, err := exec.Command("rg", rgArgs(gi,
-		"--count-matches", "--no-heading", "--no-messages", "--color", "never")...).Output()
-	if err != nil {
-		if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() == 1 {
-			return 0, nil // rg: no matches
-		}
-		return 0, err
-	}
-
-	total := 0
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if line == "" {
-			continue
-		}
-		if i := strings.LastIndex(line, ":"); i >= 0 {
-			n := 0
-			if _, serr := fmt.Sscanf(line[i+1:], "%d", &n); serr == nil {
-				total += n
-			}
-		}
-	}
-	return total, nil
-}
-
-// rgSample backs handler.Deps.Sample. It runs
-//
-//	rg -n -C1 --no-heading --no-messages --color never [scope] -- <pattern> [path]
-//
-// and is called only for a Grep that already cleared the threshold. It returns
-// the output capped at 32 KB for the worker prompt, plus the UNCAPPED byte
-// length — the latter is what the Grep would have put in the session's context,
-// and therefore the only honest baseline for the saving. Errors are returned
-// (not swallowed) so a failed sample degrades open rather than feeding the
-// worker an empty prompt.
-func rgSample(gi hookio.GrepInput) (string, int, error) {
-	out, err := exec.Command("rg", rgArgs(gi,
-		"-n", "-C1", "--no-heading", "--no-messages", "--color", "never")...).Output()
-	if err != nil {
-		if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() == 1 {
-			return "", 0, nil // rg: no matches
-		}
-		return "", 0, err
-	}
-	full := len(out)
-	if len(out) > sampleCap {
-		out = out[:sampleCap]
-	}
-	return string(out), full, nil
 }
