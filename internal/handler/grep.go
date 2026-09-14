@@ -25,7 +25,18 @@ func GrepHook(ctx context.Context, in hookio.Input, d Deps) error {
 		return hookio.Allow(d.Stdout)
 	}
 
-	total, sample, err := d.CountMatches(gi)
+	// These modes and limits are already bounded by Claude Code itself — a
+	// count or a file list returns a handful of lines however many matches
+	// exist, and an explicit small head_limit caps the result at or below the
+	// threshold. Intercepting them spends a worker call to shrink nothing.
+	if gi.OutputMode == "count" || gi.OutputMode == "files_with_matches" {
+		return hookio.Allow(d.Stdout)
+	}
+	if gi.HeadLimit > 0 && gi.HeadLimit <= d.Cfg.GrepMaxMatches {
+		return hookio.Allow(d.Stdout)
+	}
+
+	total, err := d.CountMatches(gi)
 	if err != nil {
 		d.Logf("grep-hook: count matches: %v", err)
 		return hookio.Allow(d.Stdout)
@@ -35,7 +46,14 @@ func GrepHook(ctx context.Context, in hookio.Input, d Deps) error {
 		return hookio.Allow(d.Stdout)
 	}
 
-	raw, err := d.Summarize(ctx, worker.Request{
+	// Only now is a sample worth its own rg pass.
+	sample, err := d.Sample(gi)
+	if err != nil {
+		d.Logf("grep-hook: sample: %v", err)
+		return hookio.Allow(d.Stdout)
+	}
+
+	raw, workerTokens, err := d.Summarize(ctx, worker.Request{
 		Model:   d.Cfg.Model,
 		Kind:    worker.KindClusters,
 		Content: sample,
@@ -61,6 +79,7 @@ func GrepHook(ctx context.Context, in hookio.Input, d Deps) error {
 		Tool:            "Grep",
 		OrigTokensEst:   origEst,
 		DigestTokensEst: digEst,
+		WorkerTokens:    workerTokens,
 		CacheHit:        false,
 		SavedEst:        origEst - digEst,
 	})

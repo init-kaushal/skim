@@ -37,6 +37,8 @@ type GrepInput struct {
 	OutputMode string `json:"output_mode"`
 	Glob       string `json:"glob"`
 	Type       string `json:"type"`
+	// HeadLimit is Grep's own cap on returned lines. Absent means unbounded.
+	HeadLimit int `json:"head_limit"`
 }
 
 func (i Input) Read() (ReadInput, error) {
