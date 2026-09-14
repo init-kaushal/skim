@@ -108,7 +108,7 @@ run:
 | `bash_noisy_patterns` | `["\\bcat\\s", "\\bcurl\\s", "\\btail\\s+-n\\s+\\d{3,}", "npm\\s+(run\\s+)?test", "jest", "pytest", "go\\s+test"]` | Regexes matched against the `Bash` command string; a match redirects to `skim run --`. |
 | `passthrough_globs` | `["**/*.md", "**/go.mod", ".claude/**"]` | Paths that always skip interception, regardless of size. |
 | `model` | `claude-haiku-4-5-20251001` | Model passed explicitly (`--model`) to every worker call — never inherited from the session model. |
-| `worker_timeout_sec` | `45` | Worker call timeout before the hook degrades open. |
+| `worker_timeout_sec` | `45` | Worker call timeout before the hook degrades open. Capped at 55s, under the 60s timeout the plugin declares for its hooks. |
 
 ### Kill switches (checked in this order)
 
@@ -139,6 +139,13 @@ immediately with no nested `claude -p` attempt.
   content, not an exact parse. When you need precise lines, `Read` again with
   `offset`/`limit` on the range of interest, or run `skim cat <path>` to
   force the full, unmodified file.
+- **`skim run` changes what the Bash permission system matches on.** When a
+  noisy command is redirected, the command Claude Code actually evaluates is
+  `skim run -- <original>` (or `skim run -- sh -c '<original>'` when the
+  command uses pipes, redirects or substitutions), not the original string. If
+  you rely on narrow Bash allow/deny rules, they will see the `skim run …`
+  form — write your rules accordingly, or run `/skim off` in sessions where
+  exact Bash matching matters.
 - **`Grep` interception needs `rg` (ripgrep) on `PATH`.** The hook shells out
   to ripgrep itself to count matches before deciding whether to intercept;
   without it, grep interception can't determine whether a result is large.

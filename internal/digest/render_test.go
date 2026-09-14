@@ -38,7 +38,9 @@ func TestRenderFileMap(t *testing.T) {
 		Symbols: []string{"Config", "Default", "Load", "Save"},
 		Notes:   "line numbers approximate +/- 3",
 	}
-	checkGolden(t, "filemap", RenderFileMap(fm, "/home/u/proj/internal/config/config.go"))
+	checkGolden(t, "filemap", RenderFileMap(fm,
+		"/home/u/proj/internal/config/config.go",
+		"/home/u/.claude/plugins/skim/bin/skim"))
 }
 
 func TestRenderClusters(t *testing.T) {

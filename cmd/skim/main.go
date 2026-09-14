@@ -109,6 +109,16 @@ func runWithStdin(stdin io.Reader, args []string, stdout, stderr io.Writer) int 
 		}
 		return 0
 
+	// `/skim off` / `/skim on` is the advertised kill switch in
+	// plugin/commands/skim.md, which passes $ARGUMENTS through verbatim — so
+	// the bare forms must dispatch, not just `skim config off`/`on`.
+	case "off", "on":
+		if err := cli.Config(stdout, args[0:1]); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		return 0
+
 	case "version":
 		fmt.Fprintln(stdout, "skim (dev)")
 		return 0
@@ -126,6 +136,15 @@ type hookFn func(ctx context.Context, in hookio.Input, d handler.Deps) error
 // (falling back to defaults on error), wires the production handler.Deps, and
 // invokes fn. It ALWAYS returns 0 — every failure path degrades open.
 func hookMain(stdin io.Reader, stdout io.Writer, fn hookFn) int {
+	// Spec §4.0: the recursion guard comes first. Both of these are pure env
+	// vars needing no config, so answer them before paying for a config read
+	// (which may write a file) and a cache directory sweep on every tool call.
+	// The config-file `disabled` flag and Validate() still run inside the
+	// handler via NotActiveReason — precedence is unchanged, just short-circuited.
+	if os.Getenv("SKIM_ACTIVE") == "1" || os.Getenv("SKIM_DISABLED") == "1" {
+		return 0
+	}
+
 	in, err := hookio.Parse(stdin)
 	if err != nil {
 		return 0 // malformed input: allow the tool call
@@ -156,7 +175,8 @@ func hookMain(stdin io.Reader, stdout io.Writer, fn hookFn) int {
 		Logf:         logf,
 		Now:          time.Now,
 		Stdout:       stdout,
-		CountMatches: rgCountMatches,
+		CountMatches: rgCount,
+		Sample:       rgSample,
 	}
 	_ = fn(context.Background(), in, d)
 	return 0
@@ -178,36 +198,47 @@ func loadConfigOrDefault(logf func(string, ...any)) config.Config {
 // sampleCap bounds the rg context dump fed to the worker as the Grep sample.
 const sampleCap = 32768
 
-// rgCountMatches backs handler.Deps.CountMatches. It runs
-//
-//	rg --count-matches --no-heading --no-messages --color never [--glob G] [--type T] -- <pattern> [path]
-//
-// summing the per-file `path:N` counts, then a second
-//
-//	rg -n -C1 --no-heading --color never -- <pattern> [path]
-//
-// capped at 32 KB for the sample. rg exit code 1 (no matches) is not an error;
-// any other failure (rg missing, bad regex) is returned so the hook degrades
-// open.
-func rgCountMatches(gi hookio.GrepInput) (int, string, error) {
-	args := []string{"--count-matches", "--no-heading", "--no-messages", "--color", "never"}
+// rgScope returns the args that restrict an rg invocation to the scope the
+// model asked for. Both the count and the sample must use it, or the digest can
+// describe files the Grep call never would have returned.
+func rgScope(gi hookio.GrepInput) []string {
+	var a []string
 	if gi.Glob != "" {
-		args = append(args, "--glob", gi.Glob)
+		a = append(a, "--glob", gi.Glob)
 	}
 	if gi.Type != "" {
-		args = append(args, "--type", gi.Type)
+		a = append(a, "--type", gi.Type)
 	}
+	return a
+}
+
+// rgArgs builds a full rg command line: the given mode flags, the shared scope,
+// then the pattern and optional path after `--`.
+func rgArgs(gi hookio.GrepInput, mode ...string) []string {
+	args := append([]string{}, mode...)
+	args = append(args, rgScope(gi)...)
 	args = append(args, "--", gi.Pattern)
 	if gi.Path != "" {
 		args = append(args, gi.Path)
 	}
+	return args
+}
 
-	out, err := exec.Command("rg", args...).Output()
+// rgCount backs handler.Deps.CountMatches. It runs
+//
+//	rg --count-matches --no-heading --no-messages --color never [scope] -- <pattern> [path]
+//
+// and sums the per-file `path:N` counts. rg exit code 1 (no matches) is not an
+// error; any other failure (rg missing, bad regex) is returned so the hook
+// degrades open.
+func rgCount(gi hookio.GrepInput) (int, error) {
+	out, err := exec.Command("rg", rgArgs(gi,
+		"--count-matches", "--no-heading", "--no-messages", "--color", "never")...).Output()
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() == 1 {
-			return 0, "", nil // rg: no matches
+			return 0, nil // rg: no matches
 		}
-		return 0, "", err
+		return 0, err
 	}
 
 	total := 0
@@ -222,14 +253,27 @@ func rgCountMatches(gi hookio.GrepInput) (int, string, error) {
 			}
 		}
 	}
+	return total, nil
+}
 
-	sampleArgs := []string{"-n", "-C1", "--no-heading", "--color", "never", "--", gi.Pattern}
-	if gi.Path != "" {
-		sampleArgs = append(sampleArgs, gi.Path)
+// rgSample backs handler.Deps.Sample. It runs
+//
+//	rg -n -C1 --no-heading --no-messages --color never [scope] -- <pattern> [path]
+//
+// capped at 32 KB, and is called only for a Grep that already cleared the
+// threshold. Errors are returned (not swallowed) so a failed sample degrades
+// open rather than feeding the worker an empty prompt.
+func rgSample(gi hookio.GrepInput) (string, error) {
+	out, err := exec.Command("rg", rgArgs(gi,
+		"-n", "-C1", "--no-heading", "--no-messages", "--color", "never")...).Output()
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() == 1 {
+			return "", nil // rg: no matches
+		}
+		return "", err
 	}
-	sout, _ := exec.Command("rg", sampleArgs...).Output()
-	if len(sout) > sampleCap {
-		sout = sout[:sampleCap]
+	if len(out) > sampleCap {
+		out = out[:sampleCap]
 	}
-	return total, string(sout), nil
+	return string(out), nil
 }

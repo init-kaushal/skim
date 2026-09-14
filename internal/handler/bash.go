@@ -27,15 +27,33 @@ func BashHook(_ context.Context, in hookio.Input, d Deps) error {
 		return hookio.Allow(d.Stdout)
 	}
 
+	self := execPath()
+
+	// skim's own suggestion embeds the original command, so it matches the very
+	// pattern that produced it. Let skim's commands through before matching, or
+	// the model can never escape the deny loop.
+	if isSkimCommand(bi.Command, self) {
+		return hookio.Allow(d.Stdout)
+	}
+
 	matched, pat := detect.MatchNoisy(bi.Command, d.Cfg.BashNoisyPatterns)
 	if !matched {
 		return hookio.Allow(d.Stdout)
 	}
 
+	// `skim run --` execs argv directly with no shell, so a command carrying
+	// pipes/redirects/substitutions must be wrapped explicitly — otherwise the
+	// shell that runs the suggestion applies them to skim, silently changing
+	// what the command does.
+	suggestion := fmt.Sprintf("%s run -- %s", self, bi.Command)
+	if hasShellMeta(bi.Command) {
+		suggestion = fmt.Sprintf("%s run -- sh -c %s", self, shellSingleQuote(bi.Command))
+	}
+
 	reason := fmt.Sprintf(
 		"skim: this command tends to produce large output (matched /%s/).\n"+
 			"Re-run it through skim so the full output is captured to a log and you get a digest:\n\n"+
-			"  skim run -- %s\n", pat, bi.Command)
+			"  %s\n", pat, suggestion)
 
 	d.Record(metrics.Entry{
 		TS:   d.Now().UTC().Format(time.RFC3339),

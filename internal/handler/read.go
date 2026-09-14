@@ -40,6 +40,17 @@ func ReadHook(ctx context.Context, in hookio.Input, d Deps) error {
 		return hookio.Allow(d.Stdout)
 	}
 
+	// Images, PDFs and other binaries are checked before the size threshold so
+	// no binary reaches the worker at any size: the bytes are not valid UTF-8,
+	// the digest would be useless, and denying the Read would stop the model
+	// ever viewing the file. A sniff error means "can't tell" — fall through to
+	// the normal path rather than letting an unreadable file skip interception.
+	if bin, berr := detect.LooksBinary(ri.FilePath); berr != nil {
+		d.Logf("read-hook: binary sniff %s: %v", ri.FilePath, berr)
+	} else if bin {
+		return hookio.Allow(d.Stdout)
+	}
+
 	lines, bytesLen, err := detect.FileSize(ri.FilePath)
 	if err != nil {
 		d.Logf("read-hook: stat %s: %v", ri.FilePath, err)
@@ -59,6 +70,7 @@ func ReadHook(ctx context.Context, in hookio.Input, d Deps) error {
 
 	var fm digest.FileMap
 	hit := false
+	workerTokens := 0
 	if key != "" {
 		fm, hit = d.CacheGet(key)
 	}
@@ -69,7 +81,7 @@ func ReadHook(ctx context.Context, in hookio.Input, d Deps) error {
 			d.Logf("read-hook: read %s: %v", ri.FilePath, rerr)
 			return hookio.Allow(d.Stdout)
 		}
-		raw, werr := d.Summarize(ctx, worker.Request{
+		raw, tokens, werr := d.Summarize(ctx, worker.Request{
 			Model:   d.Cfg.Model,
 			Kind:    worker.KindFileMap,
 			Content: content,
@@ -80,6 +92,7 @@ func ReadHook(ctx context.Context, in hookio.Input, d Deps) error {
 			d.Logf("read-hook: worker %s: %v", ri.FilePath, werr)
 			return hookio.Allow(d.Stdout)
 		}
+		workerTokens = tokens
 		parsed, perr := digest.ParseFileMap(raw)
 		if perr != nil {
 			d.Logf("read-hook: parse digest %s: %v", ri.FilePath, perr)
@@ -91,7 +104,7 @@ func ReadHook(ctx context.Context, in hookio.Input, d Deps) error {
 		}
 	}
 
-	reason := digest.RenderFileMap(fm, ri.FilePath)
+	reason := digest.RenderFileMap(fm, ri.FilePath, execPath())
 	origEst := metrics.EstimateTokens(bytesLen)
 	digEst := metrics.EstimateTokens(len(reason))
 	d.Record(metrics.Entry{
@@ -99,6 +112,7 @@ func ReadHook(ctx context.Context, in hookio.Input, d Deps) error {
 		Tool:            "Read",
 		OrigTokensEst:   origEst,
 		DigestTokensEst: digEst,
+		WorkerTokens:    workerTokens,
 		CacheHit:        hit,
 		SavedEst:        origEst - digEst,
 	})
