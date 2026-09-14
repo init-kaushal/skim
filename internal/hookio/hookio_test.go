@@ -2,6 +2,7 @@ package hookio
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -60,5 +61,35 @@ func TestDeny_WritesDecisionJSON(t *testing.T) {
 	}
 	if !strings.HasSuffix(got, "\n") {
 		t.Error("Deny output should end with newline")
+	}
+}
+
+// TestDeny_EscapesQuotesAndNewlines round-trips a reason containing both a
+// double quote and newlines. Deny reasons routinely carry multi-line suggested
+// shell commands (which are single-quoted and may embed quotes), so a naive
+// concatenation here would emit malformed JSON and break the hook contract.
+func TestDeny_EscapesQuotesAndNewlines(t *testing.T) {
+	reason := "skim: matched /\\bcat\\s/\nRun this instead:\n\n  /p/bin/skim run -- sh -c 'echo \"hi\" | tail -5'\n\ttabbed\\backslash\n"
+
+	var b bytes.Buffer
+	if err := Deny(&b, reason); err != nil {
+		t.Fatal(err)
+	}
+
+	var got decision
+	if err := json.Unmarshal(b.Bytes(), &got); err != nil {
+		t.Fatalf("Deny emitted invalid JSON: %v\n%s", err, b.String())
+	}
+	if got.HookSpecificOutput.PermissionDecisionReason != reason {
+		t.Errorf("reason did not round-trip:\n got %q\nwant %q",
+			got.HookSpecificOutput.PermissionDecisionReason, reason)
+	}
+	if got.HookSpecificOutput.PermissionDecision != "deny" {
+		t.Errorf("permissionDecision = %q, want deny", got.HookSpecificOutput.PermissionDecision)
+	}
+	// A raw newline inside a JSON string would be a syntax error; the encoder
+	// must have escaped them.
+	if strings.Contains(strings.TrimSuffix(b.String(), "\n"), "\n") {
+		t.Error("decision JSON contains a raw newline inside the payload")
 	}
 }

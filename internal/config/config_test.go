@@ -58,6 +58,24 @@ func TestValidate_RejectsEmptyModelAndBadThresholds(t *testing.T) {
 	}
 }
 
+// TestValidate_RejectsOversizeWorkerTimeout guards the ceiling: a worker allowed
+// to outlive the hook timeout declared in plugin/hooks/hooks.json gets killed by
+// the harness mid-call instead of degrading open.
+func TestValidate_RejectsOversizeWorkerTimeout(t *testing.T) {
+	c := Default()
+	c.WorkerTimeoutSec = maxWorkerTimeoutSec + 1
+	if c.Validate() == nil {
+		t.Fatalf("worker_timeout_sec = %d should be invalid", c.WorkerTimeoutSec)
+	}
+	c.WorkerTimeoutSec = maxWorkerTimeoutSec
+	if err := c.Validate(); err != nil {
+		t.Fatalf("worker_timeout_sec = %d should be valid: %v", c.WorkerTimeoutSec, err)
+	}
+	if d := Default(); d.WorkerTimeoutSec > maxWorkerTimeoutSec {
+		t.Fatalf("the default itself (%d) exceeds the ceiling", d.WorkerTimeoutSec)
+	}
+}
+
 func TestNotActiveReason_Precedence(t *testing.T) {
 	c := Default()
 	env := func(m map[string]string) func(string) string {

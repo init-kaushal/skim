@@ -11,6 +11,18 @@ import (
 	"github.com/kaushal/skim/internal/paths"
 )
 
+// maxWorkerTimeoutSec is the safety ceiling for worker_timeout_sec. The hook
+// must finish, process startup included, inside the 60s timeout skim declares
+// for itself in plugin/hooks/hooks.json. (Claude Code's own default for command
+// hooks is 600s, so the binding constraint is skim's declared value, not the
+// harness — a hook that stalls a session for ten minutes is the worse failure.)
+//
+// The default stays at 45s rather than something tighter because that is what
+// real work needs: a live digest of a 92 KB source file measured 22s, and the
+// same file timed out at a 30s budget. Below ~45s skim stops digesting exactly
+// the large files it exists for and silently degrades open instead.
+const maxWorkerTimeoutSec = 55
+
 type Config struct {
 	Disabled          bool     `json:"disabled"`
 	ReadMaxLines      int      `json:"read_max_lines"`
@@ -71,6 +83,11 @@ func (c Config) Validate() error {
 	if c.ReadMaxLines <= 0 || c.ReadMaxBytes <= 0 ||
 		c.GrepMaxMatches <= 0 || c.WorkerTimeoutSec <= 0 {
 		return errors.New("thresholds and timeout must be > 0")
+	}
+	// A worker allowed to outlive the hook timeout skim declares for itself
+	// gets killed by the harness mid-call instead of degrading open cleanly.
+	if c.WorkerTimeoutSec > maxWorkerTimeoutSec {
+		return fmt.Errorf("worker_timeout_sec must be <= %d (the hook timeout skim declares)", maxWorkerTimeoutSec)
 	}
 	for _, p := range c.BashNoisyPatterns {
 		if _, err := regexp.Compile(p); err != nil {
