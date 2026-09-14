@@ -84,7 +84,7 @@ func TestRun_FencedResult_StripsFence(t *testing.T) {
 	fenced := "```json" + inner + "```"
 	withFakeClaude(t, "ok", fenced)
 
-	got, err := Run(context.Background(), Request{
+	got, _, err := Run(context.Background(), Request{
 		Model: "claude-haiku-4-5-20251001", Kind: KindFileMap,
 		Content: "package main", Meta: "/x/main.go", Timeout: 5 * time.Second,
 	})

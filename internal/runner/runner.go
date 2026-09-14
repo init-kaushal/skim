@@ -25,7 +25,10 @@ import (
 // drive each branch without a real worker. It is a distinct type from
 // handler.Deps and shares nothing with it.
 type Deps struct {
-	Summarize  func(ctx context.Context, req worker.Request) ([]byte, error) // usually worker.Run
+	// Summarize returns the raw digest JSON and the tokens the call billed.
+	// Usually worker.Run; the token count is unused here (only hook
+	// interceptions are metered) but keeps one signature across both callers.
+	Summarize  func(ctx context.Context, req worker.Request) ([]byte, int, error)
 	Model      string
 	TimeoutSec int
 	Now        func() time.Time
@@ -88,7 +91,7 @@ func Run(ctx context.Context, argv []string, d Deps) error {
 		timeout = time.Duration(d.TimeoutSec) * time.Second
 	}
 
-	raw, werr := d.Summarize(ctx, worker.Request{
+	raw, _, werr := d.Summarize(ctx, worker.Request{
 		Model:   d.Model,
 		Kind:    worker.KindRun,
 		Content: tail,

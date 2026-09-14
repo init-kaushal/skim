@@ -19,11 +19,11 @@ func TestRun_CapturesOutputAndPrintsDigest(t *testing.T) {
 		Model: "m", TimeoutSec: 5, RunsDir: runs,
 		Now:    func() time.Time { return time.Unix(0, 0) },
 		Stdout: &out,
-		Summarize: func(_ context.Context, req worker.Request) ([]byte, error) {
+		Summarize: func(_ context.Context, req worker.Request) ([]byte, int, error) {
 			if !strings.Contains(req.Content, "hello-from-cmd") {
 				t.Fatalf("worker should receive captured output, got %q", req.Content)
 			}
-			return []byte(`{"summary":"printed a greeting","key_lines":["hello-from-cmd"],"exit_code":0}`), nil
+			return []byte(`{"summary":"printed a greeting","key_lines":["hello-from-cmd"],"exit_code":0}`), 42, nil
 		},
 	}
 	err := Run(context.Background(), []string{"sh", "-c", "echo hello-from-cmd"}, d)
@@ -48,8 +48,8 @@ func TestRun_WorkerFails_FallbackDigest(t *testing.T) {
 	d := Deps{
 		Model: "m", TimeoutSec: 5, RunsDir: t.TempDir(),
 		Now: func() time.Time { return time.Unix(0, 0) }, Stdout: &out,
-		Summarize: func(_ context.Context, _ worker.Request) ([]byte, error) {
-			return nil, context.DeadlineExceeded
+		Summarize: func(_ context.Context, _ worker.Request) ([]byte, int, error) {
+			return nil, 0, context.DeadlineExceeded
 		},
 	}
 	if err := Run(context.Background(), []string{"sh", "-c", "echo x; exit 3"}, d); err != nil {

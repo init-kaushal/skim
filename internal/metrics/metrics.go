@@ -55,6 +55,10 @@ type Stats struct {
 	CacheHits     int
 	CacheMisses   int
 	TotalSavedEst int
+	// TotalWorkerTokens is what the nested Haiku calls cost. Without it
+	// TotalSavedEst is only half the ledger and can't answer whether the trade
+	// nets out positive.
+	TotalWorkerTokens int
 }
 
 func Aggregate(r io.Reader) (Stats, error) {
@@ -79,6 +83,7 @@ func Aggregate(r io.Reader) (Stats, error) {
 			s.CacheMisses++
 		}
 		s.TotalSavedEst += e.SavedEst
+		s.TotalWorkerTokens += e.WorkerTokens
 	}
 	return s, sc.Err()
 }

@@ -37,5 +37,9 @@ func Stats(w io.Writer) error {
 	}
 	fmt.Fprintf(w, "  cache   %d hit / %d miss (%.0f%% hit rate)\n", s.CacheHits, s.CacheMisses, rate)
 	fmt.Fprintf(w, "  saved   ~%d tokens kept out of the main context (estimate)\n", s.TotalSavedEst)
+	fmt.Fprintf(w, "  spent   ~%d worker tokens on nested digest calls\n", s.TotalWorkerTokens)
+	fmt.Fprintf(w, "  net     ~%d tokens (saved - spent)\n", s.TotalSavedEst-s.TotalWorkerTokens)
+	fmt.Fprintln(w, "  note    worker tokens are billed at the (cheaper) worker model's rate,")
+	fmt.Fprintln(w, "          so a negative net can still be a cost win — compare prices, not counts.")
 	return nil
 }
