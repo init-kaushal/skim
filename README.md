@@ -6,6 +6,7 @@
 ![Worker model: Haiku 4.5](https://img.shields.io/badge/worker-haiku--4.5-8b5cf6?style=flat-square)
 ![Fails open](https://img.shields.io/badge/fails-open-067647?style=flat-square)
 ![No dependencies](https://img.shields.io/badge/deps-none-64748b?style=flat-square)
+![MIT license](https://img.shields.io/badge/license-MIT-3b82f6?style=flat-square)
 
 A Claude Code plugin that intercepts oversized `Read`, wide `Grep`, and noisy
 `Bash` tool calls before they run and substitutes a compact, Haiku-produced
