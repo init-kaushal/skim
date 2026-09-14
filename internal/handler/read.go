@@ -104,7 +104,7 @@ func ReadHook(ctx context.Context, in hookio.Input, d Deps) error {
 		}
 	}
 
-	reason := digest.RenderFileMap(fm, ri.FilePath, execPath())
+	reason := digest.RenderFileMap(fm, ri.FilePath, quoteSelfIfNeeded(execPath()))
 	origEst := metrics.EstimateTokens(bytesLen)
 	digEst := metrics.EstimateTokens(len(reason))
 	d.Record(metrics.Entry{

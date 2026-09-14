@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -197,5 +198,80 @@ func TestReadHook_RecursionGuard_Allows(t *testing.T) {
 	}
 	if out.Len() != 0 {
 		t.Fatal("recursion guard should allow")
+	}
+}
+
+// forceFullFileCommand extracts the "To force the full file:" command from a
+// deny reason, similar to suggestedCommand for the Bash hook.
+func forceFullFileCommand(t *testing.T, reason string) string {
+	t.Helper()
+	for _, line := range strings.Split(reason, "\n") {
+		if strings.HasPrefix(line, "To force the full file: ") {
+			return strings.TrimPrefix(line, "To force the full file: ")
+		}
+	}
+	t.Fatalf("no 'force full file' command found in reason %q", reason)
+	return ""
+}
+
+// readDenyReason runs ReadHook and returns the permissionDecisionReason it
+// emitted, or "" if the read was allowed.
+func readDenyReason(t *testing.T, path string) string {
+	t.Helper()
+	var out bytes.Buffer
+	d := baseDeps(t, &out)
+	d.Summarize = func(_ context.Context, _ worker.Request) ([]byte, int, error) {
+		return []byte(`{"summary":"large file","map":[{"lines":"1-5000","kind":"code"}]}`), 777, nil
+	}
+	if err := ReadHook(context.Background(), readInput(t, path, 0, 0), d); err != nil {
+		t.Fatal(err)
+	}
+	if out.Len() == 0 {
+		return ""
+	}
+	var dec struct {
+		HookSpecificOutput struct {
+			PermissionDecision       string `json:"permissionDecision"`
+			PermissionDecisionReason string `json:"permissionDecisionReason"`
+		} `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &dec); err != nil {
+		t.Fatalf("deny output is not valid JSON: %v (%q)", err, out.String())
+	}
+	if dec.HookSpecificOutput.PermissionDecision != "deny" {
+		t.Fatalf("decision = %q, want deny", dec.HookSpecificOutput.PermissionDecision)
+	}
+	return dec.HookSpecificOutput.PermissionDecisionReason
+}
+
+// TestReadHook_SpacedSelfPath_QuotesFull is C1 for the Read hook: when the
+// resolved skim binary's absolute path contains whitespace, the "force full
+// file" escape-hatch suggestion must shell-quote it (quoteSelfIfNeeded), or
+// when the model runs it as Bash and it gets fed back through the Bash hook,
+// isSkimCommand won't recognize it and it will be denied again forever.
+func TestReadHook_SpacedSelfPath_QuotesFull(t *testing.T) {
+	orig := executablePath
+	defer func() { executablePath = orig }()
+	spaced := "/tmp/skim test dir/bin/skim"
+	executablePath = func() (string, error) { return spaced, nil }
+
+	dir := t.TempDir()
+	f := filepath.Join(dir, "big.go")
+	os.WriteFile(f, []byte(strings.Repeat("x\n", 5000)), 0o644)
+
+	reason := readDenyReason(t, f)
+	if reason == "" {
+		t.Fatal("large file should be denied")
+	}
+
+	cmd := forceFullFileCommand(t, reason)
+	expectedQuoted := shellSingleQuote(spaced) + " cat " + f
+	if cmd != expectedQuoted {
+		t.Errorf("force full file command = %q, want %q", cmd, expectedQuoted)
+	}
+
+	// Verify the quoted form is actually in the suggestion
+	if !strings.Contains(cmd, shellSingleQuote(spaced)) {
+		t.Fatalf("suggestion should shell-quote the spaced self path, got %q", cmd)
 	}
 }
