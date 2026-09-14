@@ -145,11 +145,12 @@ immediately with no nested `claude -p` attempt.
 ## Limitations
 
 - **Latency.** Every uncached large `Read`/`Grep`/noisy `Bash` interception
-  adds one nested `claude -p` startup (roughly 3–6 seconds). Caching absorbs
-  repeat reads of the same file (keyed on path + mtime + size + model +
-  schema version), and thresholds are meant to only catch genuinely large
-  operations, but if this proves too intrusive interactively, `/skim off` is
-  the immediate escape hatch.
+  adds one nested `claude -p` call. Measured at 6–13 seconds across file sizes
+  from 17KB to 400KB — near-flat, because the cost is the call itself rather
+  than the content. Caching absorbs repeat reads of the same file (keyed on
+  path + mtime + size + model + schema version), and thresholds are meant to
+  only catch genuinely large operations, but if this proves too intrusive
+  interactively, `/skim off` is the immediate escape hatch.
 - **Approximate line numbers.** The worker-produced file map's line ranges
   are approximate (nominally ±3 lines) — they come from a Haiku pass over the
   content, not an exact parse. When you need precise lines, `Read` again with
@@ -165,6 +166,16 @@ immediately with no nested `claude -p` attempt.
 - **`Grep` interception needs `rg` (ripgrep) on `PATH`.** The hook shells out
   to ripgrep itself to count matches before deciding whether to intercept;
   without it, grep interception can't determine whether a result is large.
+- **Whether it saves money depends on the session model, and it is close.**
+  The worker is cheap per token but not free, and it reads content to compress
+  it — so the trade is a ratio, not a given. Haiku input is 5x cheaper than
+  Opus 5 input and 3x cheaper than Sonnet 5, which sets the margin. Measured
+  with `make bench`: on Opus 5 a long file pays off on the very first read
+  (2x), while a file just over the 300-line threshold needs to stay relevant
+  for ~3 more turns before it breaks even. On a Haiku session it does not pay
+  off at all. **Run `make bench FILE=<a file you actually read>` before
+  trusting this on your workload** — and note that `skim stats` reports tokens,
+  not dollars, which is not the same question (see below).
 - **Savings shrink as the session model gets cheaper.** The whole mechanic
   moves bulk content, and its re-send cost, out of the session model's
   context — the value of that scales with the session model's per-token
@@ -178,9 +189,33 @@ immediately with no nested `claude -p` attempt.
 
 ```bash
 make build   # go build -o plugin/bin/skim ./cmd/skim
-make test    # go test ./...
-make lint    # go vet ./...
+make check   # build + vet + gofmt + test, no API calls
+make smoke   # REAL API call: asserts interception actually works end to end
+make bench FILE=<path> [MODEL=opus-5] [TURNS=10]
+             # REAL API call: prices interception against letting the Read through
 ```
+
+`make smoke` exists because the entire fake-`claude` suite was green while skim
+silently did nothing in production: Haiku wraps its JSON in a markdown code
+fence, so every digest failed to parse and every interception degraded open —
+safely, invisibly, uselessly. Only a real call catches that class of bug. Run it
+before any release.
+
+`make bench` answers the question `skim stats` cannot. `stats` sums a worker
+call's input, output, cache-write and cache-read into one token count, but those
+bill at 1x, 5x, 2x and 0.1x respectively, and against a different model than the
+session — so its "net" is not a cost. `bench` makes one real worker call, takes
+`total_cost_usd` as ground truth, and reports the turn count at which
+interception breaks even.
+
+### What the worker is shown
+
+The Read hook ships at most **2000 lines** (with a 128KB backstop for minified
+or single-line files) to the worker, deliberately matching Claude Code's own
+Read cap. Digesting past that cannot save anything — the surplus was never going
+to reach the session's context — it only adds worker cost. When a file is longer,
+the digest says so explicitly and gives the line offset to continue from, rather
+than passing a prefix off as a map of the whole file.
 
 Tests use a **fake `claude` stub** placed on `PATH` during the test run: a
 script that echoes canned JSON in the `claude -p --output-format json` shape,

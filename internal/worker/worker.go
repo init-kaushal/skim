@@ -32,6 +32,11 @@ type Request struct {
 	Content string
 	Meta    string
 	Timeout time.Duration
+
+	// Partial says Content is only the leading portion of the underlying
+	// source, not all of it. The prompt then bounds the model to the excerpt
+	// instead of asking it to map a whole file it cannot see.
+	Partial bool
 }
 
 // ErrTimeout is returned (wrapped) when the nested claude call exceeds the
@@ -64,7 +69,22 @@ func Run(ctx context.Context, req Request) (result []byte, workerTokens int, err
 	cmd := exec.CommandContext(ctx, "claude", "-p",
 		"--model", req.Model, "--output-format", "json", "--max-turns", "1",
 		"--tools", "")
-	cmd.Env = append(os.Environ(), "SKIM_ACTIVE=1")
+	// MAX_THINKING_TOKENS=0 turns off the worker's extended thinking. Producing
+	// a structural digest is mechanical extraction, not reasoning, and thinking
+	// dominated both the bill and the latency. Measured on a 17.5 KB file,
+	// same prompt, same model:
+	//
+	//	thinking on:  $0.046684  31.8s  4,987 output tokens (4,369 of them thinking)
+	//	thinking off: $0.016165   5.7s    502 output tokens (0 thinking)
+	//
+	// 65% cheaper and 5.6x faster, and the digest came back *more* accurate:
+	// with thinking on, the model emitted map ranges running to line 556 of a
+	// 411-line file; with it off, the last range was 410-420. `--effort low`
+	// was also tried and does not reduce thinking on Haiku 4.5.
+	//
+	// Duplicate keys are safe here: os/exec documents that the last value for a
+	// repeated key wins, so this overrides any inherited MAX_THINKING_TOKENS.
+	cmd.Env = append(os.Environ(), "SKIM_ACTIVE=1", "MAX_THINKING_TOKENS=0")
 	cmd.Stdin = bytes.NewReader([]byte(promptFor(req)))
 
 	var stdout, stderr bytes.Buffer

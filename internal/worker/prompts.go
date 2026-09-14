@@ -8,16 +8,28 @@ import "fmt"
 func promptFor(req Request) string {
 	switch req.Kind {
 	case KindFileMap:
-		return fmt.Sprintf(`You are a code-reading assistant. Below is the full contents of the file %s.
+		// What the worker is shown is capped, so on a large file this is a
+		// prefix. Saying "the full contents" and demanding a map "top to bottom
+		// with no gaps" made the model extrapolate past what it was given —
+		// observed emitting ranges up to line 556 for a 411-line file. Describe
+		// the excerpt honestly and bound the map to it.
+		scope, rule := "the full contents of the file", "The map must cover the file top to bottom with no gaps."
+		if req.Partial {
+			scope = "the FIRST PART ONLY (the file is longer than this excerpt) of the file"
+			rule = "The map must cover the excerpt shown top to bottom with no gaps. " +
+				"Do NOT describe or guess at anything beyond where the excerpt ends, " +
+				"and do not emit line numbers past its final line."
+		}
+		return fmt.Sprintf(`You are a code-reading assistant. Below is %s %s.
 Return ONLY a JSON object, no prose, with this shape:
 {"summary": "<3-5 sentences on purpose and shape>",
  "map": [{"lines": "<start>-<end>", "kind": "<what lives there>"}, ...],
- "symbols": ["<top-level names>"],
+ "symbols": ["<top-level names, at most 40 of the most significant>"],
  "notes": "line numbers approximate +/- 3"}
-The map must cover the file top to bottom with no gaps.
+%s
 
 FILE CONTENTS:
-%s`, req.Meta, req.Content)
+%s`, scope, req.Meta, rule, req.Content)
 
 	case KindClusters:
 		return fmt.Sprintf(`You are a search-result summariser. Below are ripgrep matches for pattern %q.

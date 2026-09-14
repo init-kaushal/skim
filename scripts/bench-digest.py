@@ -32,28 +32,47 @@ CACHE_READ     = 0.10
 
 WORKER_MODEL_ID = "claude-haiku-4-5-20251001"
 WORKER_PRICE_KEY = "haiku-4.5"
-MAX_WORKER_INPUT = 400 * 1024   # must match handler.maxWorkerInputBytes
+# These must mirror internal/handler/read.go. The point of the benchmark is to
+# price what skim actually does, so any drift here makes it measure fiction.
+MAX_WORKER_INPUT_LINES = 2000          # handler.maxWorkerInputLines
+MAX_WORKER_INPUT_BYTES = 128 * 1024    # handler.maxWorkerInputBytes
 
-PROMPT = '''You are a code-reading assistant. Below is the full contents of the file {path}.
+# Mirrors internal/worker/prompts.go (KindFileMap), both scope variants.
+PROMPT = '''You are a code-reading assistant. Below is {scope} {path}.
 Return ONLY a JSON object, no prose, with this shape:
 {{"summary": "<3-5 sentences on purpose and shape>",
  "map": [{{"lines": "<start>-<end>", "kind": "<what lives there>"}}, ...],
- "symbols": ["<top-level names>"],
+ "symbols": ["<top-level names, at most 40 of the most significant>"],
  "notes": "line numbers approximate +/- 3"}}
-The map must cover the file top to bottom with no gaps.
+{rule}
 
 FILE CONTENTS:
 {content}'''
+SCOPE_FULL = "the full contents of the file"
+SCOPE_PART = "the FIRST PART ONLY (the file is longer than this excerpt) of the file"
+RULE_FULL = "The map must cover the file top to bottom with no gaps."
+RULE_PART = ("The map must cover the excerpt shown top to bottom with no gaps. "
+             "Do NOT describe or guess at anything beyond where the excerpt ends, "
+             "and do not emit line numbers past its final line.")
 
 
 def worker_call(path):
     """Run the exact digest call skim's Read hook would run. Returns the envelope."""
-    raw = open(path, encoding="utf-8", errors="replace").read()
-    truncated = len(raw.encode()) > MAX_WORKER_INPUT
-    content = raw[:MAX_WORKER_INPUT]
-    prompt = PROMPT.format(path=os.path.abspath(path), content=content)
+    lines = open(path, encoding="utf-8", errors="replace").read().splitlines(keepends=True)
+    kept = lines[:MAX_WORKER_INPUT_LINES]
+    content = "".join(kept)
+    if len(content.encode()) > MAX_WORKER_INPUT_BYTES:
+        content = content.encode()[:MAX_WORKER_INPUT_BYTES].decode("utf-8", "ignore")
+    truncated = len(kept) < len(lines) or len(content) < len("".join(kept))
+    prompt = PROMPT.format(
+        scope=SCOPE_PART if truncated else SCOPE_FULL,
+        rule=RULE_PART if truncated else RULE_FULL,
+        path=os.path.abspath(path), content=content)
 
-    env = dict(os.environ, SKIM_DISABLED="1")   # never let skim intercept its own benchmark
+    # Mirrors internal/worker/worker.go's child env. MAX_THINKING_TOKENS=0 is
+    # the single biggest cost lever (65% cheaper, 5.6x faster); leaving it out
+    # here would price a worker that no longer exists.
+    env = dict(os.environ, SKIM_DISABLED="1", MAX_THINKING_TOKENS="0")
     p = subprocess.run(
         ["claude", "-p", "--model", WORKER_MODEL_ID,
          "--output-format", "json", "--max-turns", "1", "--tools", ""],
@@ -107,7 +126,7 @@ def main():
 
     print(f"file            {a.file}")
     print(f"                {nbytes:,} bytes / {nlines:,} lines"
-          + ("   ** TRUNCATED to 400KB before the worker saw it **" if truncated else ""))
+          + (f"   ** worker saw only the first {MAX_WORKER_INPUT_LINES} lines **" if truncated else ""))
     print(f"session model   {a.session_model}  (${sm['in']}/M in)")
     print(f"worker model    {WORKER_PRICE_KEY}  (${PRICES[WORKER_PRICE_KEY]['in']}/M in)")
     print()
@@ -146,10 +165,11 @@ def main():
         print(f"  VERDICT  skim pays off only if the content would have survived "
               f"{be}+ further turns.")
     print()
-    print("  Note: the counterfactual assumes the session model ingests the whole file.")
-    print("  Claude Code's Read tool truncates at ~2000 lines, so for files longer than")
-    print("  that the real 'without skim' cost is lower than shown and skim's margin is")
-    print("  correspondingly thinner.")
+    if truncated:
+        print(f"  Note: this file is longer than {MAX_WORKER_INPUT_LINES} lines, which is also")
+        print("  Claude Code's own Read cap — so both sides above are priced on the same")
+        print("  prefix. That is the point of capping by lines: skim no longer pays to read")
+        print("  content the session model was never going to receive.")
 
 
 if __name__ == "__main__":

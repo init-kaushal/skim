@@ -275,3 +275,125 @@ func TestReadHook_SpacedSelfPath_QuotesFull(t *testing.T) {
 		t.Fatalf("suggestion should shell-quote the spaced self path, got %q", cmd)
 	}
 }
+
+// TestReadHook_LongFile_CapsWorkerInputAndDiscloses covers the change that made
+// interception pay off again on long files. skim used to ship up to 400KB to the
+// worker, but Claude Code's Read tool only ever returns 2000 lines — so every
+// byte past that was worker cost buying nothing. Measured against Opus 5 input
+// pricing, a 400KB/12,890-line file cost $0.311 to digest versus $0.119 for the
+// Read it replaced: a 2.6x loss. Two things must hold now:
+//
+//  1. the worker is shown at most maxWorkerInputLines lines, and
+//  2. the digest says so, instead of passing a prefix off as the whole file.
+func TestReadHook_LongFile_CapsWorkerInputAndDiscloses(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "long.go")
+
+	// 6000 lines, each 20 bytes — 3x the line cap, comfortably over the byte
+	// threshold, and under the 128KB backstop so lines are the binding bound.
+	line := "0123456789012345678\n"
+	var sb strings.Builder
+	for i := 0; i < 6000; i++ {
+		sb.WriteString(line)
+	}
+	if err := os.WriteFile(path, []byte(sb.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	d := baseDeps(t, &out)
+	var entries []metrics.Entry
+	captureEntry(&d, &entries)
+
+	var gotReq worker.Request
+	d.Summarize = func(_ context.Context, req worker.Request) ([]byte, int, error) {
+		gotReq = req
+		return []byte(`{"summary":"long file","map":[{"lines":"1-2000","kind":"lines"}]}`), 7, nil
+	}
+
+	if err := ReadHook(context.Background(), readInput(t, path, 0, 0), d); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. The worker saw exactly the line cap, cut on a line boundary.
+	wantBytes := maxWorkerInputLines * len(line)
+	if len(gotReq.Content) != wantBytes {
+		t.Errorf("worker got %d bytes, want %d (%d lines)",
+			len(gotReq.Content), wantBytes, maxWorkerInputLines)
+	}
+	if n := strings.Count(gotReq.Content, "\n"); n != maxWorkerInputLines {
+		t.Errorf("worker got %d lines, want %d", n, maxWorkerInputLines)
+	}
+	if !strings.HasSuffix(gotReq.Content, "\n") {
+		t.Error("worker input must end on a line boundary, not mid-line")
+	}
+	// 2. The worker was told its view is partial, so it doesn't invent ranges
+	// past the excerpt (observed: ranges to line 556 of a 411-line file).
+	if !gotReq.Partial {
+		t.Error("worker.Request.Partial should be set for a truncated file")
+	}
+
+	// 3. The model-facing digest discloses the partial coverage.
+	var dec struct {
+		HookSpecificOutput struct {
+			PermissionDecision       string `json:"permissionDecision"`
+			PermissionDecisionReason string `json:"permissionDecisionReason"`
+		} `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &dec); err != nil {
+		t.Fatalf("decode decision: %v (%s)", err, out.String())
+	}
+	if dec.HookSpecificOutput.PermissionDecision != "deny" {
+		t.Fatalf("decision = %q, want deny", dec.HookSpecificOutput.PermissionDecision)
+	}
+	if !strings.Contains(dec.HookSpecificOutput.PermissionDecisionReason, "PARTIAL") {
+		t.Errorf("digest does not disclose partial coverage:\n%s",
+			dec.HookSpecificOutput.PermissionDecisionReason)
+	}
+
+	// 4. The saving is booked against what Read would have returned (the 2000-line
+	// prefix), not against the whole 120KB file — otherwise stats credit skim for
+	// bytes that were never going to reach the context.
+	if len(entries) != 1 {
+		t.Fatalf("recorded %d entries, want 1", len(entries))
+	}
+	if got, want := entries[0].OrigTokensEst, metrics.EstimateTokens(wantBytes); got != want {
+		t.Errorf("OrigTokensEst = %d, want %d (the prefix, not the whole file)", got, want)
+	}
+}
+
+// TestReadHook_ShortFile_NoPartialBanner is the other half: a file over the
+// interception threshold but under the line cap is fully seen, so claiming
+// partial coverage would be a lie in the opposite direction.
+func TestReadHook_ShortFile_NoPartialBanner(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mid.go")
+	var sb strings.Builder
+	for i := 0; i < 500; i++ { // over the 300-line threshold, under the 2000 cap
+		sb.WriteString("0123456789012345678\n")
+	}
+	if err := os.WriteFile(path, []byte(sb.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	d := baseDeps(t, &out)
+	var gotReq worker.Request
+	d.Summarize = func(_ context.Context, req worker.Request) ([]byte, int, error) {
+		gotReq = req
+		return []byte(`{"summary":"mid","map":[{"lines":"1-500","kind":"lines"}]}`), 3, nil
+	}
+
+	if err := ReadHook(context.Background(), readInput(t, path, 0, 0), d); err != nil {
+		t.Fatal(err)
+	}
+	if len(gotReq.Content) != sb.Len() {
+		t.Errorf("worker got %d bytes, want the whole %d-byte file", len(gotReq.Content), sb.Len())
+	}
+	if gotReq.Partial {
+		t.Error("Partial should be false when the worker sees the whole file")
+	}
+	if strings.Contains(out.String(), "PARTIAL") {
+		t.Errorf("fully-seen file must not carry a PARTIAL banner:\n%s", out.String())
+	}
+}
