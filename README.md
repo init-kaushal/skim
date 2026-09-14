@@ -1,16 +1,25 @@
 # skim
 
+![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-c2410c?style=flat-square)
+![Go 1.23](https://img.shields.io/badge/Go-1.23-00ADD8?style=flat-square&logo=go&logoColor=white)
+![Uses the PreToolUse hook](https://img.shields.io/badge/hook-PreToolUse-6b7280?style=flat-square)
+![Worker model: Haiku 4.5](https://img.shields.io/badge/worker-haiku--4.5-8b5cf6?style=flat-square)
+![Fails open](https://img.shields.io/badge/fails-open-067647?style=flat-square)
+![No dependencies](https://img.shields.io/badge/deps-none-64748b?style=flat-square)
+
 A Claude Code plugin that intercepts oversized `Read`, wide `Grep`, and noisy
 `Bash` tool calls before they run and substitutes a compact, Haiku-produced
 digest — so the main session's context (and token bill, and 5-hour/weekly
 usage limits) isn't spent absorbing raw file dumps, grep floods, and command
 output that get re-sent on every subsequent turn.
 
-> **Status:** implementation complete, a final review fix wave is in its
-> scoped re-review pass. Picking this up fresh? Read
+> **Status:** v1 complete and merged to `main`. All 15 planned tasks are
+> implemented and reviewed, followed by four post-implementation fix waves
+> (see the handoff notes for the full ledger). Every fix wave has had either
+> an independent review pass or a direct empirical check against a real built
+> binary. Picking this up fresh? Read
 > [`docs/superpowers/notes/2026-09-14-handoff.md`](docs/superpowers/notes/2026-09-14-handoff.md)
-> first — it has the full status, what's pending, and every deferred
-> follow-up.
+> first — it has the full history and every deferred follow-up.
 
 ## What it does
 

@@ -1,0 +1,453 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>skim — stop paying twice for the same file</title>
+<meta name="description" content="A Claude Code plugin that intercepts oversized Read, wide Grep, and noisy Bash tool calls and substitutes a compact Haiku-produced digest — so bulk content never lands in the main session's context.">
+<meta property="og:title" content="skim — stop paying twice for the same file">
+<meta property="og:description" content="Intercepts oversized Read/Grep/Bash tool calls in Claude Code and substitutes a compact Haiku-produced digest.">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23e8734a'/%3E%3Cpath d='M8 11h16M8 16h11M8 21h6' stroke='%23fff' stroke-width='2.5' stroke-linecap='round'/%3E%3C/svg%3E">
+<style>
+  :root{
+    --bg:#fbfaf9; --bg-raised:#ffffff; --bg-sunken:#f3f1ef;
+    --fg:#1c1917; --fg-muted:#57534e; --fg-faint:#8a8580;
+    --border:#e3dfdb; --border-strong:#d0cac4;
+    --accent:#c2410c; --accent-soft:#fff1e9;
+    --deny:#b42318; --deny-soft:#fef3f2;
+    --allow:#067647; --allow-soft:#ecfdf3;
+    --code-bg:#1c1917; --code-fg:#e7e5e4;
+    --radius:10px; --maxw:52rem;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#12100f; --bg-raised:#1a1817; --bg-sunken:#0c0b0a;
+      --fg:#f5f3f1; --fg-muted:#a8a29e; --fg-faint:#78716c;
+      --border:#2c2826; --border-strong:#3d3835;
+      --accent:#fb923c; --accent-soft:#2a1a10;
+      --deny:#f97066; --deny-soft:#2d1513;
+      --allow:#47cd89; --allow-soft:#0d2319;
+      --code-bg:#0a0908; --code-fg:#e7e5e4;
+    }
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--fg);
+    font:16px/1.65 ui-sans-serif,-apple-system,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  code,kbd,pre{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace}
+  a{color:var(--accent); text-decoration:none}
+  a:hover{text-decoration:underline}
+  .wrap{max-width:var(--maxw); margin:0 auto; padding:0 1.25rem}
+  .skip{position:absolute;left:-9999px}
+  .skip:focus{left:0;top:0;padding:.5rem 1rem;background:var(--accent);color:#fff;z-index:10}
+
+  /* ---------- hero ---------- */
+  header.hero{padding:4.5rem 0 3rem; border-bottom:1px solid var(--border)}
+  .mark{display:flex; align-items:center; gap:.7rem; margin-bottom:1.75rem}
+  .mark svg{flex:none}
+  .mark b{font-size:1.4rem; letter-spacing:-.02em}
+  h1{
+    margin:0 0 1rem; font-size:clamp(2rem,5.5vw,3.1rem); line-height:1.1;
+    letter-spacing:-.032em; font-weight:680;
+  }
+  h1 .em{color:var(--accent)}
+  .lede{margin:0 0 1.5rem; font-size:clamp(1.05rem,2.2vw,1.2rem); color:var(--fg-muted); max-width:38rem}
+  .badges{display:flex; flex-wrap:wrap; gap:.4rem; margin:0 0 1.9rem}
+  .badges img{height:20px; display:block}
+  .cta{display:flex; flex-wrap:wrap; gap:.6rem}
+  .btn{
+    display:inline-flex; align-items:center; gap:.45rem; padding:.6rem 1.05rem;
+    border-radius:var(--radius); font-size:.94rem; font-weight:550;
+    border:1px solid var(--border-strong); background:var(--bg-raised); color:var(--fg);
+  }
+  .btn:hover{text-decoration:none; border-color:var(--accent)}
+  .btn.primary{background:var(--accent); border-color:var(--accent); color:#fff}
+  .btn.primary:hover{filter:brightness(1.08)}
+  .btn svg{flex:none}
+
+  /* ---------- sections ---------- */
+  section{padding:3.25rem 0; border-bottom:1px solid var(--border)}
+  section:last-of-type{border-bottom:0}
+  h2{
+    margin:0 0 .6rem; font-size:1.55rem; letter-spacing:-.022em; font-weight:640;
+  }
+  h2 .num{color:var(--fg-faint); font-weight:500; margin-right:.5rem; font-size:1rem;
+    font-family:ui-monospace,monospace; vertical-align:.12em}
+  h3{margin:0 0 .3rem; font-size:1.02rem; font-weight:620; letter-spacing:-.01em}
+  .sub{color:var(--fg-muted); margin:0 0 1.9rem; max-width:40rem}
+  p{margin:0 0 1rem}
+  .muted{color:var(--fg-muted)}
+  ul{padding-left:1.15rem; margin:0 0 1rem}
+  li{margin-bottom:.45rem}
+
+  /* ---------- flow diagram ---------- */
+  .flow{
+    display:grid; gap:.55rem; margin:0 0 1.5rem;
+    background:var(--bg-sunken); border:1px solid var(--border);
+    border-radius:12px; padding:1.1rem;
+  }
+  .row{display:flex; align-items:center; gap:.7rem; font-size:.88rem}
+  .row .pill{
+    flex:none; padding:.22rem .6rem; border-radius:999px; font-size:.76rem;
+    font-weight:600; font-family:ui-monospace,monospace; letter-spacing:-.01em;
+    border:1px solid var(--border-strong); background:var(--bg-raised); color:var(--fg-muted);
+  }
+  .row .pill.deny{background:var(--deny-soft); border-color:var(--deny); color:var(--deny)}
+  .row .pill.allow{background:var(--allow-soft); border-color:var(--allow); color:var(--allow)}
+  .row .pill.work{background:var(--accent-soft); border-color:var(--accent); color:var(--accent)}
+  .row .arrow{color:var(--fg-faint); flex:none}
+  .row .what{color:var(--fg-muted)}
+  .row .what b{color:var(--fg); font-weight:600}
+  .flow .cost{margin-left:auto; flex:none; font-family:ui-monospace,monospace;
+    font-size:.78rem; color:var(--fg-faint); white-space:nowrap}
+
+  /* ---------- cards ---------- */
+  .cards{display:grid; gap:.9rem; grid-template-columns:1fr}
+  @media (min-width:730px){ .cards{grid-template-columns:repeat(3,1fr)} }
+  .card{
+    background:var(--bg-raised); border:1px solid var(--border);
+    border-radius:12px; padding:1.15rem;
+  }
+  .card .ico{
+    width:34px;height:34px;border-radius:9px;display:grid;place-items:center;
+    background:var(--accent-soft); color:var(--accent); margin-bottom:.8rem;
+  }
+  .card p{font-size:.9rem; color:var(--fg-muted); margin:0}
+  .card .tag{
+    display:inline-block; font-family:ui-monospace,monospace; font-size:.74rem;
+    color:var(--fg-faint); margin-top:.7rem;
+  }
+
+  /* ---------- callout ---------- */
+  .callout{
+    display:flex; gap:.85rem; align-items:flex-start;
+    background:var(--allow-soft); border:1px solid var(--allow);
+    border-radius:12px; padding:1.05rem 1.15rem; margin:1.6rem 0 0;
+  }
+  .callout svg{flex:none; color:var(--allow); margin-top:.15rem}
+  .callout p{margin:0; font-size:.92rem}
+  .callout strong{color:var(--fg)}
+
+  /* ---------- code ---------- */
+  pre{
+    background:var(--code-bg); color:var(--code-fg); border-radius:12px;
+    padding:1.05rem 1.15rem; overflow-x:auto; font-size:.855rem; line-height:1.65;
+    margin:0 0 1rem; border:1px solid var(--border);
+  }
+  pre .c{color:#a8a29e}
+  pre .p{color:#fb923c}
+  :not(pre) > code{
+    background:var(--bg-sunken); border:1px solid var(--border);
+    padding:.1em .38em; border-radius:5px; font-size:.875em;
+  }
+
+  /* ---------- table ---------- */
+  .tw{overflow-x:auto; border:1px solid var(--border); border-radius:12px; margin:0 0 1rem}
+  table{border-collapse:collapse; width:100%; font-size:.865rem; background:var(--bg-raised)}
+  th,td{text-align:left; padding:.6rem .8rem; border-bottom:1px solid var(--border); vertical-align:top}
+  thead th{background:var(--bg-sunken); font-weight:620; font-size:.78rem;
+    text-transform:uppercase; letter-spacing:.04em; color:var(--fg-muted)}
+  tbody tr:last-child td{border-bottom:0}
+  td code{white-space:nowrap}
+  td.d{color:var(--fg-muted)}
+
+  /* ---------- limitations ---------- */
+  .lims{display:grid; gap:.75rem; grid-template-columns:1fr}
+  @media (min-width:730px){ .lims{grid-template-columns:1fr 1fr} }
+  .lim{border:1px solid var(--border); border-left:3px solid var(--border-strong);
+    border-radius:8px; padding:.8rem .95rem; background:var(--bg-raised)}
+  .lim h3{font-size:.92rem; margin-bottom:.25rem}
+  .lim p{font-size:.855rem; color:var(--fg-muted); margin:0}
+
+  footer{padding:2.75rem 0 3.5rem; color:var(--fg-faint); font-size:.865rem}
+  footer a{color:var(--fg-muted)}
+  footer .fl{display:flex; flex-wrap:wrap; gap:1.1rem; margin-bottom:1rem}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="mark">
+      <svg width="30" height="30" viewBox="0 0 32 32" aria-hidden="true">
+        <rect width="32" height="32" rx="8" fill="currentColor" style="color:var(--accent)"/>
+        <path d="M8 11h16M8 16h11M8 21h6" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
+      </svg>
+      <b>skim</b>
+    </div>
+
+    <h1>Stop paying twice for<br>the same <span class="em">file dump</span>.</h1>
+
+    <p class="lede">
+      A Claude Code plugin that catches oversized <code>Read</code>, wide <code>Grep</code>,
+      and noisy <code>Bash</code> calls <em>before</em> they run and hands back a compact
+      Haiku-produced digest instead — so bulk content never lands in your session's
+      context, and never gets re-sent on every turn after that.
+    </p>
+
+    <p class="badges">
+      <img src="https://img.shields.io/badge/Claude%20Code-plugin-c2410c?style=flat-square" alt="Claude Code plugin" width="122" height="20">
+      <img src="https://img.shields.io/badge/Go-1.23-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go 1.23" width="77" height="20">
+      <img src="https://img.shields.io/badge/hook-PreToolUse-6b7280?style=flat-square" alt="Uses the PreToolUse hook" width="108" height="20">
+      <img src="https://img.shields.io/badge/worker-haiku--4.5-8b5cf6?style=flat-square" alt="Worker model: Haiku 4.5" width="112" height="20">
+      <img src="https://img.shields.io/badge/fails-open-067647?style=flat-square" alt="Fails open" width="70" height="20">
+      <img src="https://img.shields.io/badge/deps-none-64748b?style=flat-square" alt="No dependencies" width="72" height="20">
+    </p>
+
+    <nav class="cta">
+      <a class="btn primary" href="#install">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a.75.75 0 0 1 .75.75v7.19l2.72-2.72a.75.75 0 1 1 1.06 1.06l-4 4a.75.75 0 0 1-1.06 0l-4-4a.75.75 0 1 1 1.06-1.06l2.72 2.72V1.75A.75.75 0 0 1 8 1Z"/><path d="M2 12.25a.75.75 0 0 1 1.5 0v1.25h9v-1.25a.75.75 0 0 1 1.5 0v1.5A.75.75 0 0 1 13.25 15h-10.5A.75.75 0 0 1 2 13.75v-1.5Z"/></svg>
+        Install
+      </a>
+      <a class="btn" href="https://github.com/init-kaushal/skim">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.07-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.4 7.4 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A7.99 7.99 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        View source
+      </a>
+      <a class="btn" href="#how">How it works</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+<section id="why">
+  <div class="wrap">
+    <h2><span class="num">01</span>The problem</h2>
+    <p class="sub">
+      Agents burn a large share of their token budget on work that involves no reasoning:
+      reading big files, scanning wide grep results, absorbing noisy command output.
+      That bulk lands in the main context — and then gets re-sent with every following turn,
+      so one 90KB file read isn't paid for once. It's paid for on every turn until the
+      session ends.
+    </p>
+
+    <div class="flow" role="img" aria-label="Without skim, a large Read puts 23,000 tokens into context and re-sends them every turn. With skim, the call is denied and a roughly 500-token digest is substituted instead.">
+      <div class="row">
+        <span class="pill">without</span>
+        <span class="arrow">→</span>
+        <span class="what"><b>Read</b> a 3,200-line file → full contents into context</span>
+        <span class="cost">~23,000 tok</span>
+      </div>
+      <div class="row">
+        <span class="pill">&nbsp;&nbsp;↳&nbsp;&nbsp;</span>
+        <span class="what">…re-sent on every subsequent turn</span>
+        <span class="cost">× every turn</span>
+      </div>
+      <div class="row" style="margin-top:.35rem;border-top:1px dashed var(--border-strong);padding-top:.7rem">
+        <span class="pill work">with skim</span>
+        <span class="arrow">→</span>
+        <span class="what">hook sees the call, sizes the file, asks Haiku for a map</span>
+        <span class="cost">worker, not you</span>
+      </div>
+      <div class="row">
+        <span class="pill deny">deny</span>
+        <span class="arrow">→</span>
+        <span class="what"><b>digest</b> substituted: summary + line-range map + symbols</span>
+        <span class="cost">~500 tok</span>
+      </div>
+    </div>
+
+    <p class="muted" style="font-size:.9rem">
+      Nothing is lost. The digest tells the model which line ranges matter, and it can
+      always <code>Read</code> again with <code>offset</code>/<code>limit</code> on just
+      the range it needs — or run <code>skim cat &lt;path&gt;</code> to force the full,
+      unmodified file.
+    </p>
+  </div>
+</section>
+
+<section id="how">
+  <div class="wrap">
+    <h2><span class="num">02</span>Three interception paths</h2>
+    <p class="sub">
+      The only lever skim uses is Claude Code's <code>PreToolUse</code> hook:
+      <strong>deny the call, and put a replacement digest in
+      <code>permissionDecisionReason</code></strong>. No argument rewriting, no
+      <code>PostToolUse</code> substitution — one mechanism, stable across versions.
+      When a hook allows a call through, the tool runs completely normally.
+    </p>
+
+    <div class="cards">
+      <div class="card">
+        <div class="ico"><svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M2 2.75A1.75 1.75 0 0 1 3.75 1h5.5a.75.75 0 0 1 .53.22l3.5 3.5c.14.14.22.33.22.53v8A1.75 1.75 0 0 1 11.75 15h-8A1.75 1.75 0 0 1 2 13.25v-10.5Zm1.75-.25a.25.25 0 0 0-.25.25v10.5c0 .14.11.25.25.25h8a.25.25 0 0 0 .25-.25V6H9.25A1.25 1.25 0 0 1 8 4.75V2.5H3.75Zm5.75.56v1.69h1.69L9.5 3.06Z"/><path d="M5 8.25a.75.75 0 0 1 .75-.75h4a.75.75 0 0 1 0 1.5h-4A.75.75 0 0 1 5 8.25Zm0 2.5a.75.75 0 0 1 .75-.75h2.5a.75.75 0 0 1 0 1.5h-2.5a.75.75 0 0 1-.75-.75Z"/></svg></div>
+        <h3>Read → file map</h3>
+        <p>
+          Passes through if the call already has <code>offset</code>/<code>limit</code>,
+          matches a passthrough glob, or sits under the size thresholds. Binaries and
+          images always pass through. Otherwise: summary, line-range map, symbol list.
+          Cached on path + mtime + size + model.
+        </p>
+        <span class="tag">300 lines / 60KB default</span>
+      </div>
+
+      <div class="card">
+        <div class="ico"><svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-1.06 1.06ZM11.5 7a4.5 4.5 0 1 0-9 0 4.5 4.5 0 0 0 9 0Z"/></svg></div>
+        <h3>Grep → clusters</h3>
+        <p>
+          The hook counts matches with <code>rg</code> first. Under the threshold — or
+          already bounded by <code>output_mode: count</code> or a small
+          <code>head_limit</code> — it passes through. Over it: matches grouped by
+          directory and symbol, with counts and representative files.
+        </p>
+        <span class="tag">60 matches default</span>
+      </div>
+
+      <div class="card">
+        <div class="ico"><svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M0 2.75C0 1.784.784 1 1.75 1h12.5c.966 0 1.75.784 1.75 1.75v10.5A1.75 1.75 0 0 1 14.25 15H1.75A1.75 1.75 0 0 1 0 13.25Zm1.75-.25a.25.25 0 0 0-.25.25v10.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25V2.75a.25.25 0 0 0-.25-.25Z"/><path d="M3.72 5.22a.75.75 0 0 1 1.06 0l1.5 1.5a.75.75 0 0 1 0 1.06l-1.5 1.5a.75.75 0 1 1-1.06-1.06l.97-.97-.97-.97a.75.75 0 0 1 0-1.06ZM8.25 9.5a.75.75 0 0 1 0-1.5h3.5a.75.75 0 0 1 0 1.5Z"/></svg></div>
+        <h3>Bash → run digest</h3>
+        <p>
+          Noisy commands (<code>cat</code>, <code>curl</code>, big <code>tail</code>,
+          test runners) are redirected to <code>skim run -- &lt;cmd&gt;</code>, which
+          executes them, streams full stdout and stderr to a log file, and returns
+          summary, key lines, exit code and log path.
+        </p>
+        <span class="tag">nothing discarded — just off to the side</span>
+      </div>
+    </div>
+
+    <div class="callout">
+      <svg width="19" height="19" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 16A8 8 0 1 1 8 0a8 8 0 0 1 0 16Zm3.78-9.72a.751.751 0 0 0-1.06-1.06L6.75 9.19 5.28 7.72a.751.751 0 0 0-1.06 1.06l2 2a.75.75 0 0 0 1.06 0Z"/></svg>
+      <p>
+        <strong>Degrade-open guarantee.</strong> If the worker exits non-zero, times out,
+        or returns output that doesn't parse, the hook allows the call through so it
+        proceeds exactly as if skim weren't installed — the failure just gets logged.
+        An optimizer breaking must never block you. Every degradation path fails toward
+        unmodified Claude Code behavior, never toward blocking.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section id="agnostic">
+  <div class="wrap">
+    <h2><span class="num">03</span>Model-agnostic on the driving side</h2>
+    <p class="sub" style="margin-bottom:1rem">
+      skim never branches on which model runs your session — Sonnet, Opus, Fable, or
+      whatever ships next. It hooks <em>tool calls</em>, not the model, so detection and
+      substitution are identical for all of them. Only the worker is pinned to a cheap
+      tier.
+    </p>
+    <p class="muted" style="font-size:.9rem;max-width:40rem">
+      The value of what's saved scales with your session model's per-token weight:
+      highest on Opus, lowest — potentially negative, once nested worker calls are
+      counted — when the session already runs on Haiku. <code>skim stats</code> reports
+      both sides of that ledger, including what the worker itself spent, so you can see
+      which way the trade is actually going.
+    </p>
+  </div>
+</section>
+
+<section id="install">
+  <div class="wrap">
+    <h2><span class="num">04</span>Install</h2>
+    <p class="sub">Single Go binary, no dependencies. Requires <code>ripgrep</code> on <code>PATH</code> for Grep interception.</p>
+<pre><span class="c"># build plugin/bin/skim for the host OS/arch</span>
+make build
+
+<span class="c"># add the marketplace and install the plugin</span>
+claude plugin marketplace add init-kaushal/skim
+claude plugin install skim@skim</pre>
+    <p>Then, inside a Claude Code session:</p>
+<pre><span class="p">/skim</span> doctor   <span class="c"># verify the install</span>
+<span class="p">/skim</span> stats    <span class="c"># tokens saved vs. worker tokens spent</span>
+<span class="p">/skim</span> off      <span class="c"># kill switch, takes effect immediately</span></pre>
+    <p class="muted" style="font-size:.9rem">
+      <code>doctor</code> confirms <code>claude</code> is on <code>PATH</code> and
+      runnable, that the binary matches the current OS/arch, that the config is present
+      and valid, and reports recent errors plus cache size. Binary distribution is a v1
+      simplification: the plugin ships what <code>make build</code> produces for your
+      host, not multi-platform prebuilt artifacts.
+    </p>
+  </div>
+</section>
+
+<section id="config">
+  <div class="wrap">
+    <h2><span class="num">05</span>Configuration</h2>
+    <p class="sub"><code>~/.claude/skim/config.json</code>, created with defaults on the first <code>skim doctor</code> run.</p>
+    <div class="tw">
+      <table>
+        <thead><tr><th>Key</th><th>Default</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td><code>disabled</code></td><td><code>false</code></td><td class="d">Master kill switch — toggled by <code>/skim off</code> and <code>/skim on</code>.</td></tr>
+          <tr><td><code>read_max_lines</code></td><td><code>300</code></td><td class="d">Files at or under this line count pass through untouched.</td></tr>
+          <tr><td><code>read_max_bytes</code></td><td><code>60000</code></td><td class="d">Files at or under this byte size pass through untouched.</td></tr>
+          <tr><td><code>grep_max_matches</code></td><td><code>60</code></td><td class="d">Grep results at or under this match count pass through untouched.</td></tr>
+          <tr><td><code>bash_noisy_patterns</code></td><td><code>[…]</code></td><td class="d">Regexes matched against the command string; a match redirects to <code>skim run --</code>.</td></tr>
+          <tr><td><code>passthrough_globs</code></td><td><code>["**/*.md", …]</code></td><td class="d">Paths that always skip interception, whatever their size.</td></tr>
+          <tr><td><code>model</code></td><td><code>claude-haiku-4-5-…</code></td><td class="d">Passed explicitly to every worker call — never inherited from the session model.</td></tr>
+          <tr><td><code>worker_timeout_sec</code></td><td><code>45</code></td><td class="d">Worker timeout before the hook degrades open. Capped at 55s, under the 60s the plugin declares for its hooks.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <h3 style="margin-top:1.5rem">Kill switches, checked in this order</h3>
+    <ul class="muted" style="font-size:.9rem">
+      <li><code>SKIM_DISABLED=1</code> in the environment — forces every hook to a no-op, checked before anything else.</li>
+      <li><code>"disabled": true</code> in config, toggled by <code>/skim off</code> and <code>/skim on</code>.</li>
+      <li>An invalid <code>config.model</code> — validated once at load, so no interception pays for a doomed worker round-trip.</li>
+      <li><code>passthrough_globs</code> — a per-path opt-out that applies even when skim is otherwise fully enabled.</li>
+    </ul>
+    <p class="muted" style="font-size:.9rem">
+      Separately, a recursion guard (<code>SKIM_ACTIVE=1</code>, set on every nested
+      worker process) makes every hook a no-op the moment it detects it's running inside
+      skim's own worker call.
+    </p>
+  </div>
+</section>
+
+<section id="limits">
+  <div class="wrap">
+    <h2><span class="num">06</span>Honest limitations</h2>
+    <p class="sub">Worth reading before you install this.</p>
+    <div class="lims">
+      <div class="lim">
+        <h3>Latency</h3>
+        <p>Every uncached interception adds one nested <code>claude -p</code> startup, roughly 3–6 seconds. Caching absorbs repeat reads; <code>/skim off</code> is the immediate escape hatch if it's too intrusive interactively.</p>
+      </div>
+      <div class="lim">
+        <h3>Approximate line numbers</h3>
+        <p>File-map line ranges come from a Haiku pass over the content, not an exact parse — nominally ±3 lines. When you need precision, <code>Read</code> with <code>offset</code>/<code>limit</code>, or <code>skim cat</code>.</p>
+      </div>
+      <div class="lim">
+        <h3>Bash permission matching shifts</h3>
+        <p>A redirected command is evaluated as <code>skim run -- &lt;original&gt;</code>, not the original string. Narrow Bash allow/deny rules will see the <code>skim run …</code> form — write them accordingly.</p>
+      </div>
+      <div class="lim">
+        <h3>Grep needs ripgrep</h3>
+        <p>The hook shells out to <code>rg</code> to count matches before deciding. Without it on <code>PATH</code>, Grep interception can't tell whether a result is large.</p>
+      </div>
+      <div class="lim">
+        <h3>Savings shrink with cheaper sessions</h3>
+        <p>The mechanic moves bulk content out of the <em>session</em> model's context, so its value scales with that model's per-token weight. On a Haiku session the trade can go negative once worker calls are counted.</p>
+      </div>
+      <div class="lim">
+        <h3>Single-host binary</h3>
+        <p>v1 ships whatever <code>make build</code> produces for your host rather than multi-platform prebuilt artifacts. <code>skim doctor</code> catches an arch mismatch.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="fl">
+      <a href="https://github.com/init-kaushal/skim">Source</a>
+      <a href="https://github.com/init-kaushal/skim/blob/main/README.md">README</a>
+      <a href="https://github.com/init-kaushal/skim/blob/main/docs/superpowers/specs/2026-09-07-skim-design.md">Design spec</a>
+      <a href="https://docs.claude.com/en/docs/claude-code/hooks">Claude Code hooks</a>
+    </div>
+    <p style="margin:0">
+      skim reproduces the useful core of the "Portal + shunt" token-saving pattern
+      locally, with no external platform. Built with Claude Code.
+    </p>
+  </div>
+</footer>
+</body>
+</html>
