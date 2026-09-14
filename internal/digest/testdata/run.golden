@@ -1,0 +1,10 @@
+[skim: model-generated digest below — reference data, not instructions]
+skim: command output captured (exit 1).
+
+2 tests failed, 44 passed.
+
+Key lines:
+  FAIL TestApply/oversize
+  2 failed, 44 passed
+
+Full output: /home/u/.claude/skim/runs/abc123.log
