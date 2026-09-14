@@ -119,6 +119,10 @@ func TestGrepHook_BoundedOutputModes_Allow(t *testing.T) {
 		"count":              `"pattern":"foo","output_mode":"count"`,
 		"files_with_matches": `"pattern":"foo","output_mode":"files_with_matches"`,
 		"small head_limit":   `"pattern":"foo","output_mode":"content","head_limit":20`,
+		// Claude Code itself defaults output_mode to "files_with_matches" when
+		// the model omits the key entirely, so PreToolUse sees OutputMode == ""
+		// for that call and must treat it the same as the explicit default.
+		"omitted output_mode": `"pattern":"foo"`,
 	}
 	for name, fields := range cases {
 		t.Run(name, func(t *testing.T) {

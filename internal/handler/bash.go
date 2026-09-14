@@ -45,9 +45,10 @@ func BashHook(_ context.Context, in hookio.Input, d Deps) error {
 	// pipes/redirects/substitutions must be wrapped explicitly — otherwise the
 	// shell that runs the suggestion applies them to skim, silently changing
 	// what the command does.
-	suggestion := fmt.Sprintf("%s run -- %s", self, bi.Command)
+	qself := quoteSelfIfNeeded(self)
+	suggestion := fmt.Sprintf("%s run -- %s", qself, bi.Command)
 	if hasShellMeta(bi.Command) {
-		suggestion = fmt.Sprintf("%s run -- sh -c %s", self, shellSingleQuote(bi.Command))
+		suggestion = fmt.Sprintf("%s run -- sh -c %s", qself, shellSingleQuote(bi.Command))
 	}
 
 	reason := fmt.Sprintf(

@@ -29,7 +29,11 @@ func GrepHook(ctx context.Context, in hookio.Input, d Deps) error {
 	// count or a file list returns a handful of lines however many matches
 	// exist, and an explicit small head_limit caps the result at or below the
 	// threshold. Intercepting them spends a worker call to shrink nothing.
-	if gi.OutputMode == "count" || gi.OutputMode == "files_with_matches" {
+	// An empty OutputMode means the model omitted output_mode entirely — Claude
+	// Code itself defaults that to "files_with_matches", so PreToolUse must
+	// treat "" the same way or every omitted-output_mode Grep call gets
+	// falsely intercepted.
+	if gi.OutputMode == "" || gi.OutputMode == "count" || gi.OutputMode == "files_with_matches" {
 		return hookio.Allow(d.Stdout)
 	}
 	if gi.HeadLimit > 0 && gi.HeadLimit <= d.Cfg.GrepMaxMatches {
