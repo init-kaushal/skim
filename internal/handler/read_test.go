@@ -30,10 +30,20 @@ func baseDeps(t *testing.T, out *bytes.Buffer) Deps {
 		Logf:     func(string, ...any) {},
 		Now:      func() time.Time { return time.Unix(0, 0) },
 		Stdout:   out,
-		CountMatches: func(hookio.GrepInput) (int, string, error) {
-			return 0, "", errors.New("no rg")
+		CountMatches: func(hookio.GrepInput) (int, error) {
+			return 0, errors.New("no rg")
+		},
+		Sample: func(hookio.GrepInput) (string, error) {
+			return "", errors.New("no rg")
 		},
 	}
+}
+
+// captureEntry swaps in a Record stub that records every metrics.Entry, so a
+// test can assert on what skim actually logged — the stats ledger is a product
+// surface, not a side effect.
+func captureEntry(d *Deps, got *[]metrics.Entry) {
+	d.Record = func(e metrics.Entry) { *got = append(*got, e) }
 }
 
 func readInput(t *testing.T, path string, offset, limit int) hookio.Input {
@@ -68,9 +78,11 @@ func TestReadHook_LargeFile_DeniesWithDigest(t *testing.T) {
 	os.WriteFile(f, []byte(strings.Repeat("x\n", 5000)), 0o644)
 
 	var out bytes.Buffer
+	var recorded []metrics.Entry
 	d := baseDeps(t, &out)
-	d.Summarize = func(_ context.Context, _ worker.Request) ([]byte, error) {
-		return []byte(`{"summary":"big file","map":[{"lines":"1-5000","kind":"x lines"}]}`), nil
+	captureEntry(&d, &recorded)
+	d.Summarize = func(_ context.Context, _ worker.Request) ([]byte, int, error) {
+		return []byte(`{"summary":"big file","map":[{"lines":"1-5000","kind":"x lines"}]}`), 777, nil
 	}
 	if err := ReadHook(context.Background(), readInput(t, f, 0, 0), d); err != nil {
 		t.Fatal(err)
@@ -81,6 +93,58 @@ func TestReadHook_LargeFile_DeniesWithDigest(t *testing.T) {
 	if !strings.Contains(out.String(), "big file") {
 		t.Fatal("deny reason should contain the digest summary")
 	}
+
+	if len(recorded) != 1 {
+		t.Fatalf("expected exactly one metrics entry, got %d", len(recorded))
+	}
+	e := recorded[0]
+	if e.Tool != "Read" {
+		t.Errorf("Tool = %q, want Read", e.Tool)
+	}
+	if e.CacheHit {
+		t.Error("CacheHit = true, want false (baseDeps CacheGet always misses)")
+	}
+	if e.WorkerTokens != 777 {
+		t.Errorf("WorkerTokens = %d, want 777 (what the worker reported)", e.WorkerTokens)
+	}
+	if e.OrigTokensEst <= e.DigestTokensEst {
+		t.Errorf("digest should be smaller than the original: orig=%d digest=%d",
+			e.OrigTokensEst, e.DigestTokensEst)
+	}
+	if e.SavedEst != e.OrigTokensEst-e.DigestTokensEst {
+		t.Errorf("SavedEst = %d, want orig-digest = %d", e.SavedEst, e.OrigTokensEst-e.DigestTokensEst)
+	}
+}
+
+// TestReadHook_BinaryFile_Allows covers the two binary gates: a known binary
+// extension, and an unknown extension whose bytes contain a NUL. Both must pass
+// through even though they are far over the size threshold — a digest of an
+// image is useless, and denying the Read would hide the file from the model
+// entirely.
+func TestReadHook_BinaryFile_Allows(t *testing.T) {
+	dir := t.TempDir()
+	blob := append([]byte("\x89PNG\r\n\x1a\n"), bytes.Repeat([]byte{0x00, 0x01, 0x02, 0x03}, 40000)...)
+
+	for _, name := range []string{"big.png", "big.bin"} {
+		t.Run(name, func(t *testing.T) {
+			f := filepath.Join(dir, name)
+			if err := os.WriteFile(f, blob, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			d := baseDeps(t, &out)
+			d.Summarize = func(_ context.Context, _ worker.Request) ([]byte, int, error) {
+				t.Fatal("worker must not be called for a binary file")
+				return nil, 0, nil
+			}
+			if err := ReadHook(context.Background(), readInput(t, f, 0, 0), d); err != nil {
+				t.Fatal(err)
+			}
+			if out.Len() != 0 {
+				t.Fatalf("binary file should allow, got %q", out.String())
+			}
+		})
+	}
 }
 
 func TestReadHook_WorkerFails_DegradesOpen(t *testing.T) {
@@ -90,8 +154,8 @@ func TestReadHook_WorkerFails_DegradesOpen(t *testing.T) {
 
 	var out bytes.Buffer
 	d := baseDeps(t, &out)
-	d.Summarize = func(_ context.Context, _ worker.Request) ([]byte, error) {
-		return nil, errors.New("boom")
+	d.Summarize = func(_ context.Context, _ worker.Request) ([]byte, int, error) {
+		return nil, 0, errors.New("boom")
 	}
 	if err := ReadHook(context.Background(), readInput(t, f, 0, 0), d); err != nil {
 		t.Fatal(err)
@@ -107,9 +171,9 @@ func TestReadHook_OffsetPresent_Allows(t *testing.T) {
 	os.WriteFile(f, []byte(strings.Repeat("x\n", 5000)), 0o644)
 	var out bytes.Buffer
 	d := baseDeps(t, &out)
-	d.Summarize = func(_ context.Context, _ worker.Request) ([]byte, error) {
+	d.Summarize = func(_ context.Context, _ worker.Request) ([]byte, int, error) {
 		t.Fatal("summarize must not be called when offset/limit present")
-		return nil, nil
+		return nil, 0, nil
 	}
 	if err := ReadHook(context.Background(), readInput(t, f, 10, 50), d); err != nil {
 		t.Fatal(err)
