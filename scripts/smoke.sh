@@ -37,7 +37,20 @@ TARGET="$TMP/sample.go"
 } > "$TARGET"
 
 echo "smoke: target $(wc -c < "$TARGET" | tr -d ' ') bytes, $(wc -l < "$TARGET" | tr -d ' ') lines"
-echo "smoke: calling the real worker (this takes ~20-40s)..."
+
+# Say which transport is about to be exercised. skim has two, and they share no
+# HTTP code: the direct /v1/messages path (needs ANTHROPIC_API_KEY or
+# ANTHROPIC_AUTH_TOKEN) and the `claude -p` fallback. A green smoke run only
+# validates the one it took, and the lesson that motivated this whole script is
+# that a transport can be fully unit-tested and still fail in production.
+if [ -n "${ANTHROPIC_API_KEY:-}" ] || [ -n "${ANTHROPIC_AUTH_TOKEN:-}" ]; then
+  echo "smoke: transport = direct API (credentials present)"
+else
+  echo "smoke: transport = claude CLI (no API credentials in the environment)"
+  echo "smoke: NOTE the direct API transport is NOT covered by this run."
+  echo "smoke:      Set ANTHROPIC_API_KEY and re-run to exercise it."
+fi
+echo "smoke: calling the real worker (this takes ~6-40s)..."
 
 OUT="$TMP/out.json"
 printf '{"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":"%s","offset":0,"limit":0}}' \

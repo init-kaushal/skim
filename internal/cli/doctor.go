@@ -9,6 +9,7 @@ import (
 	"github.com/kaushal/skim/internal/config"
 	"github.com/kaushal/skim/internal/paths"
 	"github.com/kaushal/skim/internal/rg"
+	"github.com/kaushal/skim/internal/worker"
 )
 
 // Doctor runs environment and configuration checks, writing a human-readable
@@ -47,6 +48,16 @@ func Doctor(w io.Writer, lookPath func(string) (string, error)) int {
 		} else {
 			ok("ripgrep: %s — %s", via, ver)
 		}
+	}
+
+	// Which transport the worker will use is worth stating plainly: the CLI
+	// fallback pays for Claude Code's own ~5.5K-token system prompt on every
+	// interception, which dominates the bill on small files, and nothing else
+	// surfaces the difference.
+	if tr := worker.ActiveTransport(); tr.Direct {
+		ok("worker transport: direct API (%s)", tr.Why)
+	} else {
+		info("worker transport: claude CLI — %s", tr.Why)
 	}
 
 	c, err := config.Load()

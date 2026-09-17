@@ -208,6 +208,10 @@ fence, so every digest failed to parse and every interception degraded open —
 safely, invisibly, uselessly. Only a real call catches that class of bug. Run it
 before any release.
 
+Setting `ANTHROPIC_API_KEY` is the single biggest cost lever: it switches the
+worker to the direct transport and removes Claude Code's system prompt from
+every interception.
+
 `make bench` measures a single file in isolation: it makes one real worker call,
 takes `total_cost_usd` as ground truth, and reports the turn count at which
 interception breaks even. Use it to decide whether skim suits a given kind of
@@ -249,6 +253,35 @@ Three things are deliberate here:
 The cache row counts only `Read`, the one path with a digest cache. Counting
 Grep and Bash as misses is what previously made it read "0 hit / 4 miss (0% hit
 rate)" on one Read plus three Bash interceptions.
+
+### How the worker talks to the model
+
+skim has two transports and prefers the cheaper one:
+
+| | when | cost per call, before file content |
+|---|---|---|
+| **direct API** | `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` is set | ~0 |
+| **`claude -p` CLI** | otherwise (e.g. a Claude Code subscription) | ~5,500 tokens of Claude Code system prompt, billed as a 1-hour cache write at 2x input — about **$0.011** on a cold cache |
+
+The direct path posts once to `/v1/messages` with no system prompt, no
+`cache_control` (the content is read once and never re-read, so a cache write at
+1.25–2x input would be pure loss), no thinking, and no child process. It needs
+no recursion guard either, because there is no nested Claude Code session to
+re-enter skim's own hooks.
+
+**On a subscription you get the CLI transport.** Claude Code keeps its OAuth
+token in the OS keychain, and skim deliberately does not read it: borrowing a
+session credential for out-of-band API calls is fragile against refresh and
+expiry, is a credential-exfiltration pattern whatever the intent, and a
+subscription is not an API entitlement. Set `ANTHROPIC_API_KEY` if you want the
+direct path. `skim doctor` prints which transport is active.
+
+One honest trade in the direct path: the Messages API reports tokens but not
+money — `total_cost_usd` is a CLI convenience — so that transport prices its own
+calls from a small table of worker-model rates. The CLI transport's cost figure
+is authoritative and survives price changes; the direct one can go stale. An
+unrecognised model records no cost rather than a guess, and `skim stats` says
+how many calls reported one.
 
 ### What the worker is shown
 

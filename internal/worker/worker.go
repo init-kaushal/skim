@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
@@ -69,12 +70,67 @@ func (u Usage) Tokens() int {
 // deadline. Callers should test with errors.Is(err, ErrTimeout).
 var ErrTimeout = errors.New("worker: timed out")
 
-// Run execs `claude -p --model <Model> --output-format json --max-turns 1
+// httpClient is the client the direct transport uses. It carries no Timeout of
+// its own: the deadline comes from the per-call context, which Run derives from
+// Request.Timeout. A client-level timeout would apply to the whole exchange and
+// fight that. Package-level so connections stay warm across the several
+// interceptions one session makes.
+var httpClient = &http.Client{}
+
+// transport is the seam tests use to assert which path Run chose without
+// needing either real credentials or a fake CLI on PATH.
+type transport int
+
+const (
+	transportDirect transport = iota
+	transportCLI
+)
+
+// chooseTransport reports how this call will reach the model. Direct wins
+// whenever credentials exist, because it avoids Claude Code's system prompt
+// entirely; otherwise the CLI is the only thing that can authenticate.
+func chooseTransport(env func(string) string) transport {
+	if _, ok := credentials(env); ok {
+		return transportDirect
+	}
+	return transportCLI
+}
+
+// Run produces one digest, over whichever transport is available.
+//
+// Direct HTTP to /v1/messages is preferred: it skips the ~5.5K-token Claude
+// Code system prompt that every nested `claude -p` call pays for (billed as a
+// 1-hour cache write at 2x input, about $0.011 per cold call before any file
+// content), skips a child process, and needs no recursion guard. It requires
+// ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN.
+//
+// Without those, Run falls back to the CLI, which is what a Claude Code
+// subscription install has. Both transports return the same Request/Usage
+// shapes, and both degrade open the same way, so callers do not branch.
+func Run(ctx context.Context, req Request) (result []byte, u Usage, err error) {
+	if chooseTransport(osEnv) == transportDirect {
+		c, _ := credentials(osEnv)
+		if req.Timeout > 0 {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, req.Timeout)
+			defer cancel()
+		}
+		return runDirect(ctx, req, c, baseURL(osEnv), httpClient)
+	}
+	return runCLI(ctx, req)
+}
+
+// runCLI execs `claude -p --model <Model> --output-format json --max-turns 1
 // --tools ""`, feeds it promptFor(req) on stdin with SKIM_ACTIVE=1 added to the
 // child env, and parses the `{"result": "<string>", "usage": {…}}` envelope
 // from stdout. It returns the inner result string as bytes plus what the call
 // billed, so `skim stats` can weigh the cost of the digest against what it kept
 // out of the main context.
+//
+// This is the fallback transport. It works wherever Claude Code works —
+// including on a subscription, where no API credentials exist — at the cost of
+// a child process and Claude Code's own ~5.5K-token system prompt per call.
+// Run prefers the direct transport when credentials allow it.
 //
 // `--tools ""` disables every built-in tool, which spec §4.4 requires (the
 // worker summarises text; it has no business touching the filesystem) and which
@@ -86,7 +142,7 @@ var ErrTimeout = errors.New("worker: timed out")
 // yields an error. A missing or unparseable `usage` block is NOT an error — the
 // accounting is a stats nicety and degrades to a zero Usage rather than failing
 // the call.
-func Run(ctx context.Context, req Request) (result []byte, u Usage, err error) {
+func runCLI(ctx context.Context, req Request) (result []byte, u Usage, err error) {
 	if req.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, req.Timeout)
