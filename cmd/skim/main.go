@@ -33,6 +33,7 @@ hook handlers (invoked by Claude Code, read JSON on stdin):
 commands:
   run -- <cmd>  execute a command, capture full output, print a digest
   cat <path>    print a whole file with no interception
+  demo [dir]    write a sample file big enough to trigger interception
   doctor        environment and config diagnostics
   stats         cumulative interception savings
   config        show or change configuration
@@ -78,6 +79,17 @@ func runWithStdin(stdin io.Reader, args []string, stdout, stderr io.Writer) int 
 			Record:     func(e metrics.Entry) { _ = metrics.Record(e) },
 		}
 		if err := runner.Run(context.Background(), rest[1:], d); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		return 0
+
+	case "demo":
+		dir := ""
+		if len(args) > 1 {
+			dir = args[1]
+		}
+		if err := cli.Demo(stdout, dir); err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}

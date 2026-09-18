@@ -110,6 +110,39 @@ Binary distribution is a v1 simplification: the plugin ships whatever
 `make build` produces for the host, not multi-platform prebuilt artifacts —
 that's a possible follow-up.
 
+## Try it
+
+Two ways, depending on whether you want to install it.
+
+**Without installing anything.** `--plugin-dir` loads a plugin for one session
+only, so this touches no config:
+
+```bash
+make build
+cd /some/project
+claude --plugin-dir /path/to/skim/plugin
+```
+
+**Then, in the session:**
+
+```
+/skim demo
+```
+
+That writes a ~680-line sample into the current directory and tells you to
+`Read` it. The Read gets intercepted and you get a ~25-line structural digest
+back instead of the file — and the model can still answer questions about it.
+To see the contrast, `/skim off`, read it again to get the full file, then
+`/skim on`.
+
+`/skim stats` shows what it saved and what the worker cost.
+
+The sample is written into *your* directory rather than shipped inside the
+plugin on purpose: an installed plugin lives under `~/.claude/plugins/`, which
+matches the default `.claude/**` passthrough glob, so a bundled sample would be
+passed through untouched and the demo would appear to do nothing. `skim demo`
+refuses to write anywhere under `.claude/` for the same reason.
+
 ## Configuration
 
 `~/.claude/skim/config.json`, created with defaults on first `skim doctor`
