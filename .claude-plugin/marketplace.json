@@ -1,7 +1,30 @@
 {
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "skim",
-  "owner": "init-kaushal",
+  "owner": {
+    "name": "Kaushal Sharma",
+    "email": "kishorkaushal941@gmail.com"
+  },
+  "description": "Token-saving tool-call interception for Claude Code.",
   "plugins": [
-    { "name": "skim", "source": "./plugin", "description": "Token-saving tool-call interceptor for Claude Code." }
+    {
+      "name": "skim",
+      "source": "./plugin",
+      "displayName": "skim",
+      "description": "Token-saving tool-call interceptor for Claude Code.",
+      "version": "0.1.0",
+      "category": "development",
+      "author": {
+        "name": "Kaushal Sharma"
+      },
+      "homepage": "https://github.com/init-kaushal/skim",
+      "repository": "https://github.com/init-kaushal/skim",
+      "keywords": [
+        "tokens",
+        "context",
+        "cost",
+        "hooks"
+      ]
+    }
   ]
 }

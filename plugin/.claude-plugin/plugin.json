@@ -2,7 +2,21 @@
   "name": "skim",
   "version": "0.1.0",
   "description": "Intercepts oversized Read/Grep/Bash tool calls and replaces their output with a compact Haiku-produced digest.",
+  "author": {
+    "name": "Kaushal Sharma",
+    "email": "kishorkaushal941@gmail.com"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/init-kaushal/skim",
+  "repository": "https://github.com/init-kaushal/skim",
+  "keywords": [
+    "tokens",
+    "context",
+    "cost",
+    "hooks",
+    "digest",
+    "haiku"
+  ],
   "hooks": "./hooks/hooks.json",
-  "commands": "./commands",
-  "agents": "./agents"
+  "commands": "./commands"
 }
