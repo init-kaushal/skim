@@ -120,8 +120,30 @@ func Run(ctx context.Context, req Request) (result []byte, u Usage, err error) {
 	return runCLI(ctx, req)
 }
 
+// cliSystemPrompt replaces Claude Code's default system prompt on the worker
+// call. The default one is the CLI transport's largest fixed cost — and it is
+// the transport every subscription install uses, where no API key exists to
+// switch to the direct path, so this is the only way to cut it for them.
+//
+// Measured on a 17.5 KB file, thinking already off, same prompt and model:
+//
+//	default system prompt:  $0.027770  10,864 cache-write tokens
+//	this system prompt:     $0.020860   6,654 cache-write tokens
+//
+// 4,210 fewer input tokens per call. Billed as a 1-hour cache write at 2x
+// input, that is about $0.0084 saved on every interception, roughly 25% of a
+// small file's digest cost.
+//
+// It also isolates the worker properly: with an explicit system prompt, Claude
+// Code stops injecting its dynamic sections, so the project's own CLAUDE.md and
+// environment details no longer leak into a call that only has to describe one
+// file's structure.
+const cliSystemPrompt = "You extract structure from files and command output, " +
+	"and reply with raw JSON only."
+
 // runCLI execs `claude -p --model <Model> --output-format json --max-turns 1
-// --tools ""`, feeds it promptFor(req) on stdin with SKIM_ACTIVE=1 added to the
+// --tools "" --system-prompt <minimal>`, feeds it promptFor(req) on stdin with
+// SKIM_ACTIVE=1 added to the
 // child env, and parses the `{"result": "<string>", "usage": {…}}` envelope
 // from stdout. It returns the inner result string as bytes plus what the call
 // billed, so `skim stats` can weigh the cost of the digest against what it kept
@@ -151,7 +173,7 @@ func runCLI(ctx context.Context, req Request) (result []byte, u Usage, err error
 
 	cmd := exec.CommandContext(ctx, "claude", "-p",
 		"--model", req.Model, "--output-format", "json", "--max-turns", "1",
-		"--tools", "")
+		"--tools", "", "--system-prompt", cliSystemPrompt)
 	// MAX_THINKING_TOKENS=0 turns off the worker's extended thinking. Producing
 	// a structural digest is mechanical extraction, not reasoning, and thinking
 	// dominated both the bill and the latency. Measured on a 17.5 KB file,

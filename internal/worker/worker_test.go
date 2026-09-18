@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -109,3 +110,67 @@ func TestRun_MissingUsage_TokensZeroNotError(t *testing.T) {
 // TestReadHook_RecursionGuard_Allows in internal/handler and by
 // TestIntegration_ReadHook_RecursionGuard in cmd/skim. A worker-level test that
 // only checked Run returned no error asserted nothing and has been removed.
+
+// TestRunCLI_PassesMinimalSystemPrompt guards the CLI transport's largest cost
+// saving. Claude Code's default system prompt is ~5.5K tokens, billed as a
+// 1-hour cache write at 2x input, and the CLI is the transport every
+// subscription install uses — there is no API key there to switch to the direct
+// path, so replacing the system prompt is the only lever available. Dropping
+// this flag would silently restore ~4,210 input tokens per interception.
+func TestRunCLI_PassesMinimalSystemPrompt(t *testing.T) {
+	dir := t.TempDir()
+	argsFile := filepath.Join(dir, "args.txt")
+
+	// A stand-in `claude` that records its own argv, then answers like the real
+	// CLI so runCLI gets a parseable envelope. The reply is written with a
+	// quoted heredoc so the shell does no substitution on the JSON.
+	const stub = `#!/bin/sh
+printf '%s\n' "$@" > ARGS_FILE
+cat > /dev/null
+cat <<'JSON'
+{"type":"result","result":"{\"summary\":\"s\",\"map\":[{\"lines\":\"1-2\",\"kind\":\"k\"}]}"}
+JSON
+`
+	script := strings.Replace(stub, "ARGS_FILE", argsFile, 1)
+	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Prepend rather than replace: the stub itself shells out, and the existing
+	// withFakeClaude helper prepends for the same reason.
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if _, _, err := runCLI(context.Background(), Request{
+		Model: "m", Kind: KindFileMap, Timeout: 30 * time.Second,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := strings.Split(strings.TrimRight(string(got), "\n"), "\n")
+
+	idx := -1
+	for i, a := range args {
+		if a == "--system-prompt" {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		t.Fatalf("--system-prompt not passed; argv was %v", args)
+	}
+	if idx+1 >= len(args) || args[idx+1] != cliSystemPrompt {
+		t.Errorf("--system-prompt value = %q, want %q", args[idx+1], cliSystemPrompt)
+	}
+	// The prompt must be short: its whole purpose is to displace a large one.
+	if len(cliSystemPrompt) > 200 {
+		t.Errorf("cliSystemPrompt is %d bytes — too long to be saving anything", len(cliSystemPrompt))
+	}
+	// --tools "" must survive alongside it; it is what keeps the worker from
+	// touching the filesystem and halves the prompt again.
+	if !strings.Contains(strings.Join(args, " "), "--tools") {
+		t.Errorf("--tools dropped; argv was %v", args)
+	}
+}

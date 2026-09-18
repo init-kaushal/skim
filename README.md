@@ -208,10 +208,6 @@ fence, so every digest failed to parse and every interception degraded open —
 safely, invisibly, uselessly. Only a real call catches that class of bug. Run it
 before any release.
 
-Setting `ANTHROPIC_API_KEY` is the single biggest cost lever: it switches the
-worker to the direct transport and removes Claude Code's system prompt from
-every interception.
-
 `make bench` measures a single file in isolation: it makes one real worker call,
 takes `total_cost_usd` as ground truth, and reports the turn count at which
 interception breaks even. Use it to decide whether skim suits a given kind of
@@ -258,10 +254,13 @@ rate)" on one Read plus three Bash interceptions.
 
 skim has two transports and prefers the cheaper one:
 
-| | when | cost per call, before file content |
+**No API key is required.** skim runs on whatever credentials Claude Code
+already has. The key only selects a cheaper transport if you happen to have one.
+
+| | when | fixed cost per call, before file content |
 |---|---|---|
-| **direct API** | `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` is set | ~0 |
-| **`claude -p` CLI** | otherwise (e.g. a Claude Code subscription) | ~5,500 tokens of Claude Code system prompt, billed as a 1-hour cache write at 2x input — about **$0.011** on a cold cache |
+| **`claude -p` CLI** | the default — anything Claude Code can authenticate, including a subscription | ~1,300 tokens (a minimal system prompt replaces Claude Code's ~5,500-token default) |
+| **direct API** | `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` happens to be set | ~0 |
 
 The direct path posts once to `/v1/messages` with no system prompt, no
 `cache_control` (the content is read once and never re-read, so a cache write at
@@ -269,12 +268,18 @@ The direct path posts once to `/v1/messages` with no system prompt, no
 no recursion guard either, because there is no nested Claude Code session to
 re-enter skim's own hooks.
 
-**On a subscription you get the CLI transport.** Claude Code keeps its OAuth
-token in the OS keychain, and skim deliberately does not read it: borrowing a
-session credential for out-of-band API calls is fragile against refresh and
-expiry, is a credential-exfiltration pattern whatever the intent, and a
-subscription is not an API entitlement. Set `ANTHROPIC_API_KEY` if you want the
-direct path. `skim doctor` prints which transport is active.
+**On a subscription you get the CLI transport, and that is the supported path.**
+Claude Code keeps its OAuth token in the OS keychain, and skim deliberately does
+not read it: borrowing a session credential for out-of-band API calls is fragile
+against refresh and expiry, is a credential-exfiltration pattern whatever the
+intent, and a subscription is not an API entitlement. So the CLI transport is
+what a plugin install actually uses, and it is tuned for that — it passes its
+own minimal `--system-prompt`, which displaces Claude Code's default and saves
+**4,210 input tokens per call** (measured: 10,864 → 6,654 cache-write tokens,
+about $0.0084 an interception). That also stops the project's `CLAUDE.md` and
+environment details leaking into a call that only has to describe one file.
+
+`skim doctor` prints which transport is active.
 
 One honest trade in the direct path: the Messages API reports tokens but not
 money — `total_cost_usd` is a CLI convenience — so that transport prices its own
