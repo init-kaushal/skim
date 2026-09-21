@@ -420,8 +420,10 @@ claude plugin install skim@skim</pre>
       <code>SHA256SUMS</code> before running it</strong> — a download whose hash
       does not match is discarded, never executed. It is cached, so this happens
       once per version. Prebuilt for darwin and linux on arm64 and amd64; a
-      local <code>make build</code> always takes precedence, and building from
-      source is the last resort. If every route fails the hooks exit 0 and do
+      local <code>make build</code> always takes precedence. Building from
+      source is a last resort that only applies to a checkout — an installed
+      plugin has no Go module beside it, so for installs the download is the
+      route that matters. If every route fails the hooks exit 0 and do
       nothing — your tool calls behave exactly as if skim were absent — and
       <code>/skim doctor</code> says so.
     </p>

@@ -387,3 +387,60 @@ func sha256File(t *testing.T, path string) string {
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
 }
+
+// TestManifestDoesNotRedeclareAutoloadedPaths guards a failure that
+// `claude plugin validate` does not catch and that only appears at install
+// time — where it takes the whole plugin down, not just one feature:
+//
+//	Status: ✘ failed to load
+//	Error: Hook load failed: Duplicate hooks file detected: ./hooks/hooks.json
+//	resolves to already-loaded file … The standard hooks/hooks.json is loaded
+//	automatically, so manifest.hooks should only reference additional hook files.
+//
+// The standard directories and files are discovered on their own. Naming one
+// in plugin.json asks for it to be loaded twice. The manifest fields exist for
+// *extra* paths only — superpowers, for instance, uses `hooks` to point at a
+// non-standard hooks-cursor.json.
+func TestManifestDoesNotRedeclareAutoloadedPaths(t *testing.T) {
+	root := repoRoot(t)
+	raw, err := os.ReadFile(filepath.Join(root, "plugin", ".claude-plugin", "plugin.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest map[string]any
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	// field in plugin.json -> the path it must not point at
+	standard := map[string]string{
+		"hooks":    "hooks/hooks.json",
+		"commands": "commands",
+		"agents":   "agents",
+		"skills":   "skills",
+	}
+	for field, stdPath := range standard {
+		v, present := manifest[field]
+		if !present {
+			continue
+		}
+		s, ok := v.(string)
+		if !ok {
+			continue // a non-string form is not this mistake
+		}
+		norm := strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(s), "./"), "/")
+		if norm == stdPath {
+			t.Errorf("plugin.json declares %q: %q, which is the auto-loaded standard path. "+
+				"Claude Code loads it anyway and then refuses the plugin with a duplicate-load "+
+				"error, so the whole plugin fails to load. Remove the field, or point it at an "+
+				"additional non-standard file.", field, s)
+		}
+	}
+
+	// The directories themselves must still be there to be discovered.
+	for _, must := range []string{"hooks/hooks.json", "commands", "agents"} {
+		if _, err := os.Stat(filepath.Join(root, "plugin", must)); err != nil {
+			t.Errorf("plugin/%s is missing, so there is nothing to auto-load: %v", must, err)
+		}
+	}
+}

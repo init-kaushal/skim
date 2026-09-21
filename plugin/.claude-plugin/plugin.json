@@ -16,7 +16,5 @@
     "hooks",
     "digest",
     "haiku"
-  ],
-  "hooks": "./hooks/hooks.json",
-  "commands": "./commands"
+  ]
 }
