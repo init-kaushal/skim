@@ -1,0 +1,60 @@
+name: release
+
+# Tagging v<x.y.z> publishes the binaries the launcher downloads. The tag is
+# the trigger rather than a manual dispatch so that what is released always
+# corresponds to a commit you can check out.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # required to create the release and upload assets
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # Release only what passes. A broken binary is worse than a missing one,
+      # because the launcher will happily download, verify and run it.
+      - name: Test
+        run: make check
+
+      - name: Derive version from tag
+        id: v
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      # The launcher looks for skim-<version>-<os>-<arch>, so the version baked
+      # into plugin/bin/skim must match the tag or every download 404s.
+      - name: Check the launcher points at this version
+        run: |
+          declared=$(sed -n 's/^SKIM_VERSION="\(.*\)"$/\1/p' plugin/bin/skim)
+          if [ "$declared" != "${{ steps.v.outputs.version }}" ]; then
+            echo "plugin/bin/skim declares SKIM_VERSION=$declared but the tag is ${{ steps.v.outputs.version }}." >&2
+            echo "Every install would try to download an asset this release does not contain." >&2
+            exit 1
+          fi
+
+      - name: Build
+        run: scripts/build-release.sh "${{ steps.v.outputs.version }}" dist
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes "Prebuilt \`skim\` binaries. The plugin launcher downloads the one matching your platform on first use and verifies it against \`SHA256SUMS\` before running it — no Go toolchain needed.
+
+          Install:
+
+              claude plugin marketplace add init-kaushal/skim
+              claude plugin install skim@skim
+          " \
+            dist/*

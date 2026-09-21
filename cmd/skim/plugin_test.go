@@ -1,10 +1,15 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -178,4 +183,207 @@ func TestLauncherDegradesOpenWithoutABinary(t *testing.T) {
 	if err != nil || !strings.Contains(string(log), "skim-launcher") {
 		t.Errorf("launcher should leave a note in skim.log; got err=%v log=%q", err, log)
 	}
+}
+
+// TestLauncherVersionMatchesManifest keeps the two places a version is written
+// in step. The launcher downloads skim-<SKIM_VERSION>-<os>-<arch>, so if it
+// drifts from the plugin manifest — and therefore from the tag that was
+// released — every install 404s on first use and silently falls back to
+// building from source, or to nothing at all.
+func TestLauncherVersionMatchesManifest(t *testing.T) {
+	root := repoRoot(t)
+
+	launcher, err := os.ReadFile(filepath.Join(root, "plugin", "bin", "skim"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var declared string
+	for _, line := range strings.Split(string(launcher), "\n") {
+		if strings.HasPrefix(line, "SKIM_VERSION=") {
+			declared = strings.Trim(strings.TrimPrefix(line, "SKIM_VERSION="), `"`)
+			break
+		}
+	}
+	if declared == "" {
+		t.Fatal("launcher declares no SKIM_VERSION")
+	}
+
+	raw, err := os.ReadFile(filepath.Join(root, "plugin", ".claude-plugin", "plugin.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	if declared != manifest.Version {
+		t.Errorf("launcher SKIM_VERSION=%q but plugin.json version=%q; "+
+			"the launcher would download an asset the release does not contain",
+			declared, manifest.Version)
+	}
+}
+
+// launcherIn stages the real launcher in a throwaway plugin tree with no module
+// beside it, so source builds cannot mask the download path under test.
+func launcherIn(t *testing.T) (launcher, home string) {
+	t.Helper()
+	src, err := os.ReadFile(filepath.Join(repoRoot(t), "plugin", "bin", "skim"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	binDir := filepath.Join(dir, "plugin", "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(binDir, "skim")
+	if err := os.WriteFile(p, src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return p, filepath.Join(dir, "home")
+}
+
+func runLauncher(t *testing.T, launcher, home, base, arg string) (int, string) {
+	t.Helper()
+	cmd := exec.Command(launcher, arg)
+	cmd.Env = append(os.Environ(), "SKIM_HOME="+home, "SKIM_DOWNLOAD_BASE="+base)
+	var sb strings.Builder
+	cmd.Stdout, cmd.Stderr = &sb, &sb
+	err := cmd.Run()
+	code := 0
+	if ee, ok := err.(*exec.ExitError); ok {
+		code = ee.ExitCode()
+	} else if err != nil {
+		t.Fatalf("running launcher: %v", err)
+	}
+	return code, sb.String()
+}
+
+// TestLauncherRefusesATamperedDownload is the security property. The launcher
+// runs unattended on every tool call, so a downloaded artifact it cannot verify
+// against the published checksums is a remote code execution path, not an
+// inconvenience. It must refuse, discard, and say so.
+func TestLauncherRefusesATamperedDownload(t *testing.T) {
+	if _, err := exec.LookPath("curl"); err != nil {
+		if _, err := exec.LookPath("wget"); err != nil {
+			t.Skip("no curl or wget to download with")
+		}
+	}
+
+	// A release whose checksum file does not describe its binary.
+	dist := t.TempDir()
+	payload := "#!/bin/sh\necho PWNED\n"
+	name := "skim-" + launcherVersion(t) + "-" + hostOS() + "-" + hostArch()
+	if err := os.WriteFile(filepath.Join(dist, name), []byte(payload), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sums := "0000000000000000000000000000000000000000000000000000000000000000  " + name + "\n"
+	if err := os.WriteFile(filepath.Join(dist, "SHA256SUMS"), []byte(sums), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.FileServer(http.Dir(dist)))
+	defer srv.Close()
+
+	launcher, home := launcherIn(t)
+
+	code, out := runLauncher(t, launcher, home, srv.URL, "version")
+	if strings.Contains(out, "PWNED") {
+		t.Fatal("the launcher EXECUTED a binary whose checksum did not match")
+	}
+	if code == 0 {
+		t.Errorf("expected a non-zero exit for a user-facing command, got 0: %s", out)
+	}
+	if _, err := os.Stat(filepath.Join(home, "bin", name)); err == nil {
+		t.Error("an unverified download must not be cached")
+	}
+	log, _ := os.ReadFile(filepath.Join(home, "skim.log"))
+	if !strings.Contains(string(log), "checksum mismatch") {
+		t.Errorf("the rejection should be diagnosable from the log, got: %s", log)
+	}
+
+	// And a hook must still not break the tool call.
+	code, out = runLauncher(t, launcher, home, srv.URL, "read-hook")
+	if code != 0 || strings.TrimSpace(out) != "" {
+		t.Errorf("hook must degrade open silently; exit=%d out=%q", code, out)
+	}
+}
+
+// TestLauncherRunsAVerifiedDownload is the happy path: a correctly published
+// release is downloaded, verified, cached and executed, with no Go toolchain
+// involved.
+func TestLauncherRunsAVerifiedDownload(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh")
+	}
+	dist := t.TempDir()
+	name := "skim-" + launcherVersion(t) + "-" + hostOS() + "-" + hostArch()
+	// Stand-in for the real binary; the launcher only has to fetch, verify and
+	// exec it, and a shell script proves that end to end without a 6MB build.
+	payload := "#!/bin/sh\necho launched-ok\n"
+	bin := filepath.Join(dist, name)
+	if err := os.WriteFile(bin, []byte(payload), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256File(t, bin)
+	if err := os.WriteFile(filepath.Join(dist, "SHA256SUMS"),
+		[]byte(sum+"  "+name+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.FileServer(http.Dir(dist)))
+	defer srv.Close()
+
+	launcher, home := launcherIn(t)
+	code, out := runLauncher(t, launcher, home, srv.URL, "version")
+	if code != 0 {
+		t.Fatalf("exit=%d out=%q", code, out)
+	}
+	if !strings.Contains(out, "launched-ok") {
+		t.Errorf("verified binary was not executed, got %q", out)
+	}
+	if _, err := os.Stat(filepath.Join(home, "bin", name)); err != nil {
+		t.Errorf("verified download should be cached for next time: %v", err)
+	}
+}
+
+func launcherVersion(t *testing.T) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(repoRoot(t), "plugin", "bin", "skim"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if strings.HasPrefix(line, "SKIM_VERSION=") {
+			return strings.Trim(strings.TrimPrefix(line, "SKIM_VERSION="), `"`)
+		}
+	}
+	t.Fatal("no SKIM_VERSION in launcher")
+	return ""
+}
+
+func hostOS() string {
+	if runtime.GOOS == "darwin" || runtime.GOOS == "linux" {
+		return runtime.GOOS
+	}
+	return "unsupported"
+}
+
+func hostArch() string {
+	switch runtime.GOARCH {
+	case "arm64", "amd64":
+		return runtime.GOARCH
+	}
+	return "unsupported"
+}
+
+func sha256File(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }

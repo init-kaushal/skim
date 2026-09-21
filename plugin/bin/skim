@@ -1,61 +1,167 @@
 #!/bin/sh
 # skim launcher — the file the hooks actually invoke.
 #
-# Why this exists: plugin/bin/ was gitignored, so an installed plugin shipped
-# hooks.json pointing at ${CLAUDE_PLUGIN_ROOT}/bin/skim with no such file. Every
-# hook failed to exec, Claude Code let the tool call through, and skim did
-# nothing at all — silently, on every install that was not the author's own
-# build directory. This script is tracked, so the hook path always exists.
+# Why this exists at all: plugin/bin/ used to be gitignored, so an installed
+# plugin shipped a hooks.json pointing at ${CLAUDE_PLUGIN_ROOT}/bin/skim with no
+# such file. Every hook failed to exec, Claude Code let the tool call through,
+# and skim did nothing — silently, on every install that was not the author's
+# own build directory. This script is tracked, so the hook path always exists.
 #
-# Adding a plugin from a git repo clones the WHOLE repo, so the Go module sits
-# two levels up from here and the real binary can be built on first use.
+# It resolves a real binary in this order:
 #
-# Contract: hook subcommands must NEVER fail the tool call. If the binary is
-# missing and cannot be built, they exit 0 (degrade open) and leave a note in
-# the log. User-facing subcommands say what is wrong instead of staying quiet.
+#   1. a local build (plugin/bin/skim-bin) — what `make build` produces, so a
+#      source checkout always wins and a developer never gets a stale download
+#   2. an already-downloaded release binary cached under SKIM_HOME
+#   3. a download of the release artifact for this platform, verified against
+#      the published SHA256SUMS before it is ever executed
+#   4. a local `go build`, if the module and a toolchain are present
+#
+# Contract: hook subcommands must NEVER fail a tool call. If none of the above
+# works they exit 0 in silence and leave a note in the log. User-facing
+# subcommands say what went wrong instead, because the original bug was
+# invisible precisely because nothing ever spoke up.
 set -u
 
+# SKIM_VERSION is the release whose artifacts this plugin expects. It is kept in
+# step with plugin/.claude-plugin/plugin.json by TestLauncherVersionMatchesManifest.
+SKIM_VERSION="0.1.0"
+SKIM_REPO="init-kaushal/skim"
+
 BIN_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
-REAL="$BIN_DIR/skim-bin"
+LOCAL_BIN="$BIN_DIR/skim-bin"
 MODULE_ROOT=$(CDPATH= cd -- "$BIN_DIR/../.." && pwd -P)
-LOG_DIR="${SKIM_HOME:-$HOME/.claude/skim}"
+HOME_DIR="${SKIM_HOME:-$HOME/.claude/skim}"
+CACHE_DIR="$HOME_DIR/bin"
 
 note() {
-    mkdir -p "$LOG_DIR" 2>/dev/null || return 0
+    mkdir -p "$HOME_DIR" 2>/dev/null || return 0
     printf '%s skim-launcher: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" \
-        >> "$LOG_DIR/skim.log" 2>/dev/null || true
+        >> "$HOME_DIR/skim.log" 2>/dev/null || true
 }
 
-# Build once, on demand. Concurrent hooks may race here; each writes its own
-# temp file and renames, so the worst case is redundant work, never a partial
-# binary at the path the next hook will exec.
-if [ ! -x "$REAL" ]; then
-    if command -v go >/dev/null 2>&1 && [ -f "$MODULE_ROOT/go.mod" ]; then
-        tmp="$REAL.build.$$"
-        if (cd "$MODULE_ROOT" && go build -o "$tmp" ./cmd/skim) >/dev/null 2>&1; then
-            mv -f "$tmp" "$REAL" 2>/dev/null || rm -f "$tmp"
-            note "built $REAL"
-        else
-            rm -f "$tmp"
-            note "go build failed in $MODULE_ROOT"
-        fi
+is_hook() {
+    case "${1:-}" in
+        read-hook | grep-hook | bash-hook) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# --- platform -------------------------------------------------------------
+os=$(uname -s 2>/dev/null || echo unknown)
+arch=$(uname -m 2>/dev/null || echo unknown)
+case "$os" in
+    Darwin) os=darwin ;;
+    Linux) os=linux ;;
+    *) os=unsupported ;;
+esac
+case "$arch" in
+    arm64 | aarch64) arch=arm64 ;;
+    x86_64 | amd64) arch=amd64 ;;
+    *) arch=unsupported ;;
+esac
+
+ASSET="skim-${SKIM_VERSION}-${os}-${arch}"
+CACHED="$CACHE_DIR/$ASSET"
+BASE_URL="${SKIM_DOWNLOAD_BASE:-https://github.com/$SKIM_REPO/releases/download/v$SKIM_VERSION}"
+
+sha256_of() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" 2>/dev/null | cut -d' ' -f1
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$1" 2>/dev/null | cut -d' ' -f1
     else
-        note "no binary at $REAL and no Go toolchain to build one"
+        echo ""
     fi
+}
+
+fetch() { # fetch <url> <dest> -> 0 on success
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --max-time 120 -o "$2" "$1" 2>/dev/null
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q -T 120 -O "$2" "$1" 2>/dev/null
+    else
+        return 1
+    fi
+}
+
+# Download the release binary and verify it against the published checksum
+# list. A download that cannot be verified is deleted, never executed: this
+# script runs unattended on every tool call, so an unchecked artifact would be
+# a remote-code-execution path rather than a convenience.
+download() {
+    [ "$os" = unsupported ] && return 1
+    [ "$arch" = unsupported ] && return 1
+    mkdir -p "$CACHE_DIR" 2>/dev/null || return 1
+
+    tmp="$CACHE_DIR/.$ASSET.$$"
+    sums="$CACHE_DIR/.SHA256SUMS.$$"
+
+    if ! fetch "$BASE_URL/$ASSET" "$tmp"; then
+        rm -f "$tmp"
+        note "download failed: $BASE_URL/$ASSET"
+        return 1
+    fi
+    if ! fetch "$BASE_URL/SHA256SUMS" "$sums"; then
+        rm -f "$tmp" "$sums"
+        note "could not fetch SHA256SUMS; refusing to run an unverified binary"
+        return 1
+    fi
+
+    want=$(grep " $ASSET\$" "$sums" 2>/dev/null | cut -d' ' -f1)
+    got=$(sha256_of "$tmp")
+    rm -f "$sums"
+
+    if [ -z "$want" ] || [ -z "$got" ] || [ "$want" != "$got" ]; then
+        rm -f "$tmp"
+        note "checksum mismatch for $ASSET (wanted '${want:-none}', got '${got:-none}'); discarded"
+        return 1
+    fi
+
+    chmod +x "$tmp" 2>/dev/null
+    mv -f "$tmp" "$CACHED" 2>/dev/null || { rm -f "$tmp"; return 1; }
+    note "downloaded and verified $ASSET"
+    return 0
+}
+
+build_from_source() {
+    command -v go >/dev/null 2>&1 || return 1
+    [ -f "$MODULE_ROOT/go.mod" ] || return 1
+    tmp="$LOCAL_BIN.build.$$"
+    if (cd "$MODULE_ROOT" && go build -o "$tmp" ./cmd/skim) >/dev/null 2>&1; then
+        mv -f "$tmp" "$LOCAL_BIN" 2>/dev/null || { rm -f "$tmp"; return 1; }
+        note "built $LOCAL_BIN from source"
+        return 0
+    fi
+    rm -f "$tmp"
+    note "go build failed in $MODULE_ROOT"
+    return 1
+}
+
+# --- resolve --------------------------------------------------------------
+REAL=""
+if [ -x "$LOCAL_BIN" ]; then
+    REAL="$LOCAL_BIN"
+elif [ -x "$CACHED" ]; then
+    REAL="$CACHED"
+elif [ "${SKIM_NO_DOWNLOAD:-}" != "1" ] && download; then
+    REAL="$CACHED"
+elif build_from_source; then
+    REAL="$LOCAL_BIN"
 fi
 
-if [ ! -x "$REAL" ]; then
-    case "${1:-}" in
-        read-hook | grep-hook | bash-hook)
-            # Degrade open: the tool call proceeds exactly as if skim were absent.
-            exit 0
-            ;;
-    esac
-    echo "skim: no binary at $REAL, and it could not be built automatically." >&2
-    if ! command -v go >/dev/null 2>&1; then
-        echo "      No Go toolchain found. Install Go, then: cd $MODULE_ROOT && make build" >&2
+if [ -z "$REAL" ]; then
+    if is_hook "${1:-}"; then
+        # Degrade open: the tool call proceeds exactly as if skim were absent.
+        exit 0
+    fi
+    echo "skim: could not find, download or build a binary for ${os}/${arch}." >&2
+    echo "      Looked for: $LOCAL_BIN" >&2
+    echo "                  $CACHED" >&2
+    echo "      Tried:      $BASE_URL/$ASSET" >&2
+    if command -v go >/dev/null 2>&1; then
+        echo "      Build one:  cd $MODULE_ROOT && make build" >&2
     else
-        echo "      Build it with: cd $MODULE_ROOT && make build" >&2
+        echo "      Install Go and run: cd $MODULE_ROOT && make build" >&2
     fi
     exit 1
 fi

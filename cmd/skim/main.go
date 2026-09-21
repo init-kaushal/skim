@@ -21,6 +21,11 @@ import (
 	"github.com/kaushal/skim/internal/worker"
 )
 
+// version is stamped at build time by scripts/build-release.sh via
+// -ldflags "-X main.version=...". It stays "dev" for a plain `go build`, which
+// is how you can tell a local build from a released artifact.
+var version = "dev"
+
 func main() { os.Exit(runWithStdin(os.Stdin, os.Args[1:], os.Stdout, os.Stderr)) }
 
 const usage = `usage: skim <command> [args]
@@ -134,7 +139,7 @@ func runWithStdin(stdin io.Reader, args []string, stdout, stderr io.Writer) int 
 		return 0
 
 	case "version":
-		fmt.Fprintln(stdout, "skim (dev)")
+		fmt.Fprintf(stdout, "skim %s\n", version)
 		return 0
 
 	default:

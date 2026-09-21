@@ -414,12 +414,15 @@ claude --plugin-dir /path/to/skim/plugin</pre>
 <pre>claude plugin marketplace add init-kaushal/skim
 claude plugin install skim@skim</pre>
     <p class="muted" style="font-size:.9rem">
-      <strong>A Go toolchain is needed on first use.</strong> The file the hooks
-      invoke is a small tracked launcher; on its first run it compiles the real
-      binary from the source that ships beside it, then execs that afterwards.
-      So the first interception of a session takes a few seconds longer and the
-      rest are immediate. Without Go the hooks exit 0 and do nothing — your tool
-      calls behave exactly as if skim were absent — and
+      <strong>No Go toolchain needed.</strong> The file the hooks invoke is a
+      small tracked launcher. On first use it downloads the prebuilt binary for
+      your platform and <strong>verifies it against the release's published
+      <code>SHA256SUMS</code> before running it</strong> — a download whose hash
+      does not match is discarded, never executed. It is cached, so this happens
+      once per version. Prebuilt for darwin and linux on arm64 and amd64; a
+      local <code>make build</code> always takes precedence, and building from
+      source is the last resort. If every route fails the hooks exit 0 and do
+      nothing — your tool calls behave exactly as if skim were absent — and
       <code>/skim doctor</code> says so.
     </p>
 <pre><span class="p">/skim</span> doctor   <span class="c"># verify the install, and which transport is active</span>

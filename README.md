@@ -157,25 +157,37 @@ Then, inside a Claude Code session:
 /skim doctor
 ```
 
-**You need a Go toolchain on first use.** `plugin/bin/skim` is a small tracked
-launcher, not the binary: on its first invocation it compiles
-`plugin/bin/skim-bin` from the source that ships alongside it, then execs that
-from then on. Adding a marketplace from a git repo clones the whole repo, so
-the Go module is right there. The first interception of a session therefore
-takes a few seconds longer; every one after it is immediate.
+**No Go toolchain needed.** `plugin/bin/skim` is a small tracked launcher, not
+the binary. On first use it downloads the prebuilt binary for your platform from
+the matching GitHub release and **verifies it against the published
+`SHA256SUMS` before running it** — a download whose hash does not match is
+discarded, never executed. It is cached under `~/.claude/skim/bin/`, so this
+happens once per version, not once per session.
 
-If Go is missing, the hooks **exit 0 and do nothing** — your tool calls behave
-exactly as if skim were not installed — and the reason is written to
-`~/.claude/skim/skim.log`. `/skim doctor` will say so out loud rather than
-staying quiet; running `make build` in the checkout fixes it.
+Resolution order, first hit wins:
+
+1. `plugin/bin/skim-bin` — a local `make build`, so a source checkout always
+   beats a download and you never run a stale artifact while developing
+2. an already-downloaded release binary in the cache
+3. a fresh, checksum-verified download
+4. `go build` from the source that ships beside the plugin, if Go is available
+
+Prebuilt for `darwin/arm64`, `darwin/amd64`, `linux/amd64` and `linux/arm64`.
+Windows is not published: the launcher is a POSIX shell script, so a Windows
+binary would ship with nothing able to start it.
+
+If every route fails, the hooks **exit 0 and do nothing** — your tool calls
+behave exactly as if skim were not installed — and the reason is written to
+`~/.claude/skim/skim.log`. `/skim doctor` says so out loud rather than staying
+quiet. `SKIM_NO_DOWNLOAD=1` skips the download entirely.
 
 `doctor` also confirms `claude` is on `PATH` and runnable, that ripgrep is
 reachable, that the config file is present and valid, and reports the last few
 errors from `skim.log` plus cache size.
 
-Binary distribution is a v1 simplification: skim builds for the host on first
-use rather than shipping multi-platform prebuilt artifacts — a possible
-follow-up is publishing them per release.
+Releases are cut by pushing a `v*` tag: CI runs the full suite, cross-compiles
+every target, publishes them with their checksums, and refuses to release if
+the version baked into the launcher does not match the tag.
 
 ## Try it
 

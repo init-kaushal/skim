@@ -2,7 +2,7 @@
 # it as skim-bin so a build never overwrites the file the hooks depend on.
 BIN := plugin/bin/skim-bin
 
-.PHONY: build test lint fmt check smoke bench
+.PHONY: build test lint fmt check smoke bench release
 
 build:
 	go build -o $(BIN) ./cmd/skim
@@ -36,3 +36,12 @@ TURNS ?= 10
 bench:
 	@test -n "$(FILE)" || { echo "usage: make bench FILE=<path> [MODEL=opus-5] [TURNS=10]"; exit 2; }
 	@python3 scripts/bench-digest.py "$(FILE)" --session-model "$(MODEL)" --turns "$(TURNS)"
+
+# Cross-compile the per-platform artifacts a release publishes, plus the
+# SHA256SUMS the launcher verifies against. CI runs this on a tag; run it
+# locally to check a target still builds before tagging.
+#   make release VERSION=0.1.0
+VERSION ?=
+release:
+	@test -n "$(VERSION)" || { echo "usage: make release VERSION=0.1.0"; exit 2; }
+	@./scripts/build-release.sh "$(VERSION)" dist

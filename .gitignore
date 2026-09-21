@@ -6,3 +6,4 @@ plugin/bin/*.build.*
 *.log
 .DS_Store
 .worktrees/
+dist/
