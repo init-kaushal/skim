@@ -1,0 +1,63 @@
+#!/bin/sh
+# skim launcher — the file the hooks actually invoke.
+#
+# Why this exists: plugin/bin/ was gitignored, so an installed plugin shipped
+# hooks.json pointing at ${CLAUDE_PLUGIN_ROOT}/bin/skim with no such file. Every
+# hook failed to exec, Claude Code let the tool call through, and skim did
+# nothing at all — silently, on every install that was not the author's own
+# build directory. This script is tracked, so the hook path always exists.
+#
+# Adding a plugin from a git repo clones the WHOLE repo, so the Go module sits
+# two levels up from here and the real binary can be built on first use.
+#
+# Contract: hook subcommands must NEVER fail the tool call. If the binary is
+# missing and cannot be built, they exit 0 (degrade open) and leave a note in
+# the log. User-facing subcommands say what is wrong instead of staying quiet.
+set -u
+
+BIN_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+REAL="$BIN_DIR/skim-bin"
+MODULE_ROOT=$(CDPATH= cd -- "$BIN_DIR/../.." && pwd -P)
+LOG_DIR="${SKIM_HOME:-$HOME/.claude/skim}"
+
+note() {
+    mkdir -p "$LOG_DIR" 2>/dev/null || return 0
+    printf '%s skim-launcher: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" \
+        >> "$LOG_DIR/skim.log" 2>/dev/null || true
+}
+
+# Build once, on demand. Concurrent hooks may race here; each writes its own
+# temp file and renames, so the worst case is redundant work, never a partial
+# binary at the path the next hook will exec.
+if [ ! -x "$REAL" ]; then
+    if command -v go >/dev/null 2>&1 && [ -f "$MODULE_ROOT/go.mod" ]; then
+        tmp="$REAL.build.$$"
+        if (cd "$MODULE_ROOT" && go build -o "$tmp" ./cmd/skim) >/dev/null 2>&1; then
+            mv -f "$tmp" "$REAL" 2>/dev/null || rm -f "$tmp"
+            note "built $REAL"
+        else
+            rm -f "$tmp"
+            note "go build failed in $MODULE_ROOT"
+        fi
+    else
+        note "no binary at $REAL and no Go toolchain to build one"
+    fi
+fi
+
+if [ ! -x "$REAL" ]; then
+    case "${1:-}" in
+        read-hook | grep-hook | bash-hook)
+            # Degrade open: the tool call proceeds exactly as if skim were absent.
+            exit 0
+            ;;
+    esac
+    echo "skim: no binary at $REAL, and it could not be built automatically." >&2
+    if ! command -v go >/dev/null 2>&1; then
+        echo "      No Go toolchain found. Install Go, then: cd $MODULE_ROOT && make build" >&2
+    else
+        echo "      Build it with: cd $MODULE_ROOT && make build" >&2
+    fi
+    exit 1
+fi
+
+exec "$REAL" "$@"

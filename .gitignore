@@ -1,4 +1,8 @@
-plugin/bin/
+# Only the compiled binary is ignored. plugin/bin/skim is the tracked launcher
+# the hooks invoke — ignoring the whole directory is what shipped a plugin whose
+# hooks pointed at a file that did not exist.
+plugin/bin/skim-bin
+plugin/bin/*.build.*
 *.log
 .DS_Store
 .worktrees/

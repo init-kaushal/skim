@@ -413,6 +413,15 @@ claude --plugin-dir /path/to/skim/plugin</pre>
     <h3 style="margin-top:1.4rem;margin-bottom:.5rem">Installing</h3>
 <pre>claude plugin marketplace add init-kaushal/skim
 claude plugin install skim@skim</pre>
+    <p class="muted" style="font-size:.9rem">
+      <strong>A Go toolchain is needed on first use.</strong> The file the hooks
+      invoke is a small tracked launcher; on its first run it compiles the real
+      binary from the source that ships beside it, then execs that afterwards.
+      So the first interception of a session takes a few seconds longer and the
+      rest are immediate. Without Go the hooks exit 0 and do nothing — your tool
+      calls behave exactly as if skim were absent — and
+      <code>/skim doctor</code> says so.
+    </p>
 <pre><span class="p">/skim</span> doctor   <span class="c"># verify the install, and which transport is active</span>
 <span class="p">/skim</span> stats    <span class="c"># what it saved, and what the worker actually billed</span>
 <span class="p">/skim</span> off      <span class="c"># kill switch, takes effect immediately</span></pre>

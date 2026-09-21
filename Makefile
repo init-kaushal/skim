@@ -1,4 +1,6 @@
-BIN := plugin/bin/skim
+# The tracked launcher lives at plugin/bin/skim; the compiled binary sits beside
+# it as skim-bin so a build never overwrites the file the hooks depend on.
+BIN := plugin/bin/skim-bin
 
 .PHONY: build test lint fmt check smoke bench
 

@@ -147,7 +147,6 @@ how many calls reported one.
 ## Install
 
 ```bash
-make build                                    # builds plugin/bin/skim for the host OS/arch
 claude plugin marketplace add init-kaushal/skim      # or a local checkout path
 claude plugin install skim@skim
 ```
@@ -158,13 +157,25 @@ Then, inside a Claude Code session:
 /skim doctor
 ```
 
-`doctor` confirms `claude` is on `PATH` and runnable, that `plugin/bin/skim`
-is built for the current OS/arch, that the config file is present and valid,
-and reports the last few errors from `skim.log` plus cache size.
+**You need a Go toolchain on first use.** `plugin/bin/skim` is a small tracked
+launcher, not the binary: on its first invocation it compiles
+`plugin/bin/skim-bin` from the source that ships alongside it, then execs that
+from then on. Adding a marketplace from a git repo clones the whole repo, so
+the Go module is right there. The first interception of a session therefore
+takes a few seconds longer; every one after it is immediate.
 
-Binary distribution is a v1 simplification: the plugin ships whatever
-`make build` produces for the host, not multi-platform prebuilt artifacts —
-that's a possible follow-up.
+If Go is missing, the hooks **exit 0 and do nothing** — your tool calls behave
+exactly as if skim were not installed — and the reason is written to
+`~/.claude/skim/skim.log`. `/skim doctor` will say so out loud rather than
+staying quiet; running `make build` in the checkout fixes it.
+
+`doctor` also confirms `claude` is on `PATH` and runnable, that ripgrep is
+reachable, that the config file is present and valid, and reports the last few
+errors from `skim.log` plus cache size.
+
+Binary distribution is a v1 simplification: skim builds for the host on first
+use rather than shipping multi-platform prebuilt artifacts — a possible
+follow-up is publishing them per release.
 
 ## Try it
 
