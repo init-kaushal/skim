@@ -88,6 +88,62 @@ A recursion guard (`SKIM_ACTIVE=1`, set on every nested worker process) makes
 every hook a no-op the moment it detects it's running inside skim's own
 worker call, so the worker's own tool use never re-enters the hooks.
 
+## What the worker is shown
+
+The Read hook ships at most **2000 lines** (with a 128KB backstop for minified
+or single-line files) to the worker, deliberately matching Claude Code's own
+Read cap. Digesting past that cannot save anything — the surplus was never going
+to reach the session's context — it only adds worker cost. When a file is longer,
+the digest says so explicitly and gives the line offset to continue from, rather
+than passing a prefix off as a map of the whole file.
+
+Tests use a **fake `claude` stub** placed on `PATH` during the test run: a
+script that echoes canned JSON in the `claude -p --output-format json` shape,
+so the full hook round-trip (detect → invoke worker → parse → render deny
+reason) runs deterministically end-to-end with zero real API calls. This is
+also how degradation is tested — the stub can return malformed JSON, exit
+non-zero, or sleep past `worker_timeout_sec` to assert the hook falls back to
+allow/no-decision and logs the failure. Digest renderers (file map, clusters,
+run) are covered by golden-file tests.
+
+## How the worker talks to the model
+
+skim has two transports and prefers the cheaper one:
+
+**No API key is required.** skim runs on whatever credentials Claude Code
+already has. The key only selects a cheaper transport if you happen to have one.
+
+| | when | fixed cost per call, before file content |
+|---|---|---|
+| **`claude -p` CLI** | the default — anything Claude Code can authenticate, including a subscription | ~1,300 tokens (a minimal system prompt replaces Claude Code's ~5,500-token default) |
+| **direct API** | `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` happens to be set | ~0 |
+
+The direct path posts once to `/v1/messages` with no system prompt, no
+`cache_control` (the content is read once and never re-read, so a cache write at
+1.25–2x input would be pure loss), no thinking, and no child process. It needs
+no recursion guard either, because there is no nested Claude Code session to
+re-enter skim's own hooks.
+
+**On a subscription you get the CLI transport, and that is the supported path.**
+Claude Code keeps its OAuth token in the OS keychain, and skim deliberately does
+not read it: borrowing a session credential for out-of-band API calls is fragile
+against refresh and expiry, is a credential-exfiltration pattern whatever the
+intent, and a subscription is not an API entitlement. So the CLI transport is
+what a plugin install actually uses, and it is tuned for that — it passes its
+own minimal `--system-prompt`, which displaces Claude Code's default and saves
+**4,210 input tokens per call** (measured: 10,864 → 6,654 cache-write tokens,
+about $0.0084 an interception). That also stops the project's `CLAUDE.md` and
+environment details leaking into a call that only has to describe one file.
+
+`skim doctor` prints which transport is active.
+
+One honest trade in the direct path: the Messages API reports tokens but not
+money — `total_cost_usd` is a CLI convenience — so that transport prices its own
+calls from a small table of worker-model rates. The CLI transport's cost figure
+is authoritative and survives price changes; the direct one can go stale. An
+unrecognised model records no cost rather than a guess, and `skim stats` says
+how many calls reported one.
+
 ## Install
 
 ```bash
@@ -175,6 +231,43 @@ run:
 When disabled by any of the above, every hook allows its tool call through
 immediately with no nested `claude -p` attempt.
 
+## Reading `skim stats`
+
+```
+  tool     intercepts   tokens saved     worker $
+  Bash              1              0       0.0000
+  Read              1            829       0.0425
+  Run               1          14892       0.0425
+
+  note    Bash only redirects; its savings and cost appear on the Run line.
+  cache   0 hit / 1 miss (0% hit rate, Read only)
+
+  assuming a opus-5 session (5.00 $/Mtok in), content surviving 10 more turns:
+    saved    ~15721 tokens  =  $0.0786 on first read, $0.1572 with re-sends
+    spent    $0.0850 actually billed by the worker (2 of 3 calls reported cost)
+    net      $+0.0722  — ahead
+```
+
+Three things are deliberate here:
+
+- **The verdict is in dollars, not tokens.** A worker call's input, output,
+  cache-write and cache-read tokens bill at 1x, 5x, 2x and 0.1x of the input
+  rate, and against a different model than the session — so subtracting a token
+  sum from tokens-saved compares quantities that share no unit. The cost figure
+  comes from the CLI's own `total_cost_usd` per call, not from a price table
+  compiled into skim, so it stays right when prices change.
+- **The session model is an assumption, and says so.** The `PreToolUse` payload
+  does not carry it, so `stats` cannot detect it. Pass `--session-model` to match
+  your setup; the verdict genuinely flips between Opus and a Haiku session.
+- **`Bash` and `Run` are separate rows.** The Bash hook only redirects — it makes
+  no worker call and saves nothing by itself. The saving and the cost both land
+  on the `Run` row, when `skim run` actually executes and digests the command.
+  A `Bash` row of zeroes is correct, not a bug.
+
+The cache row counts only `Read`, the one path with a digest cache. Counting
+Grep and Bash as misses is what previously made it read "0 hit / 4 miss (0% hit
+rate)" on one Read plus three Bash interceptions.
+
 ## Limitations
 
 - **Latency.** Every uncached large `Read`/`Grep`/noisy `Bash` interception
@@ -246,95 +339,3 @@ takes `total_cost_usd` as ground truth, and reports the turn count at which
 interception breaks even. Use it to decide whether skim suits a given kind of
 file. Use `skim stats` for the running total across a real session.
 
-### Reading `skim stats`
-
-```
-  tool     intercepts   tokens saved     worker $
-  Bash              1              0       0.0000
-  Read              1            829       0.0425
-  Run               1          14892       0.0425
-
-  note    Bash only redirects; its savings and cost appear on the Run line.
-  cache   0 hit / 1 miss (0% hit rate, Read only)
-
-  assuming a opus-5 session (5.00 $/Mtok in), content surviving 10 more turns:
-    saved    ~15721 tokens  =  $0.0786 on first read, $0.1572 with re-sends
-    spent    $0.0850 actually billed by the worker (2 of 3 calls reported cost)
-    net      $+0.0722  — ahead
-```
-
-Three things are deliberate here:
-
-- **The verdict is in dollars, not tokens.** A worker call's input, output,
-  cache-write and cache-read tokens bill at 1x, 5x, 2x and 0.1x of the input
-  rate, and against a different model than the session — so subtracting a token
-  sum from tokens-saved compares quantities that share no unit. The cost figure
-  comes from the CLI's own `total_cost_usd` per call, not from a price table
-  compiled into skim, so it stays right when prices change.
-- **The session model is an assumption, and says so.** The `PreToolUse` payload
-  does not carry it, so `stats` cannot detect it. Pass `--session-model` to match
-  your setup; the verdict genuinely flips between Opus and a Haiku session.
-- **`Bash` and `Run` are separate rows.** The Bash hook only redirects — it makes
-  no worker call and saves nothing by itself. The saving and the cost both land
-  on the `Run` row, when `skim run` actually executes and digests the command.
-  A `Bash` row of zeroes is correct, not a bug.
-
-The cache row counts only `Read`, the one path with a digest cache. Counting
-Grep and Bash as misses is what previously made it read "0 hit / 4 miss (0% hit
-rate)" on one Read plus three Bash interceptions.
-
-### How the worker talks to the model
-
-skim has two transports and prefers the cheaper one:
-
-**No API key is required.** skim runs on whatever credentials Claude Code
-already has. The key only selects a cheaper transport if you happen to have one.
-
-| | when | fixed cost per call, before file content |
-|---|---|---|
-| **`claude -p` CLI** | the default — anything Claude Code can authenticate, including a subscription | ~1,300 tokens (a minimal system prompt replaces Claude Code's ~5,500-token default) |
-| **direct API** | `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` happens to be set | ~0 |
-
-The direct path posts once to `/v1/messages` with no system prompt, no
-`cache_control` (the content is read once and never re-read, so a cache write at
-1.25–2x input would be pure loss), no thinking, and no child process. It needs
-no recursion guard either, because there is no nested Claude Code session to
-re-enter skim's own hooks.
-
-**On a subscription you get the CLI transport, and that is the supported path.**
-Claude Code keeps its OAuth token in the OS keychain, and skim deliberately does
-not read it: borrowing a session credential for out-of-band API calls is fragile
-against refresh and expiry, is a credential-exfiltration pattern whatever the
-intent, and a subscription is not an API entitlement. So the CLI transport is
-what a plugin install actually uses, and it is tuned for that — it passes its
-own minimal `--system-prompt`, which displaces Claude Code's default and saves
-**4,210 input tokens per call** (measured: 10,864 → 6,654 cache-write tokens,
-about $0.0084 an interception). That also stops the project's `CLAUDE.md` and
-environment details leaking into a call that only has to describe one file.
-
-`skim doctor` prints which transport is active.
-
-One honest trade in the direct path: the Messages API reports tokens but not
-money — `total_cost_usd` is a CLI convenience — so that transport prices its own
-calls from a small table of worker-model rates. The CLI transport's cost figure
-is authoritative and survives price changes; the direct one can go stale. An
-unrecognised model records no cost rather than a guess, and `skim stats` says
-how many calls reported one.
-
-### What the worker is shown
-
-The Read hook ships at most **2000 lines** (with a 128KB backstop for minified
-or single-line files) to the worker, deliberately matching Claude Code's own
-Read cap. Digesting past that cannot save anything — the surplus was never going
-to reach the session's context — it only adds worker cost. When a file is longer,
-the digest says so explicitly and gives the line offset to continue from, rather
-than passing a prefix off as a map of the whole file.
-
-Tests use a **fake `claude` stub** placed on `PATH` during the test run: a
-script that echoes canned JSON in the `claude -p --output-format json` shape,
-so the full hook round-trip (detect → invoke worker → parse → render deny
-reason) runs deterministically end-to-end with zero real API calls. This is
-also how degradation is tested — the stub can return malformed JSON, exit
-non-zero, or sleep past `worker_timeout_sec` to assert the hook falls back to
-allow/no-decision and logs the failure. Digest renderers (file map, clusters,
-run) are covered by golden-file tests.
