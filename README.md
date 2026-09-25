@@ -8,6 +8,8 @@
 ![No dependencies](https://img.shields.io/badge/deps-none-64748b?style=flat-square)
 ![MIT license](https://img.shields.io/badge/license-MIT-3b82f6?style=flat-square)
 
+**[Documentation & landing page →](https://init-kaushal.github.io/skim/)**
+
 A Claude Code plugin that intercepts oversized `Read`, wide `Grep`, and noisy
 `Bash` tool calls before they run and substitutes a compact, Haiku-produced
 digest — so the main session's context (and token bill, and 5-hour/weekly
