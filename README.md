@@ -148,10 +148,29 @@ how many calls reported one.
 
 ## Install
 
+**Option A — Go install (recommended, no binary download)**
+
 ```bash
-claude plugin marketplace add init-kaushal/skim      # or a local checkout path
+go install github.com/init-kaushal/skim/cmd/skim@latest
+claude plugin marketplace add init-kaushal/skim
 claude plugin install skim@skim
 ```
+
+The plugin launcher detects the `go install`-ed binary on `PATH` and uses it
+directly — nothing is downloaded.
+
+**Option B — Auto-download (no Go toolchain needed)**
+
+```bash
+claude plugin marketplace add init-kaushal/skim
+claude plugin install skim@skim
+```
+
+On first use the launcher downloads the prebuilt binary for your platform from
+the matching GitHub release and **verifies it against the published
+`SHA256SUMS` before running it** — a download whose hash does not match is
+discarded, never executed. It is cached under `~/.claude/skim/bin/`, so this
+happens once per version, not once per session.
 
 Then, inside a Claude Code session:
 
@@ -159,26 +178,20 @@ Then, inside a Claude Code session:
 /skim doctor
 ```
 
-**No Go toolchain needed.** `plugin/bin/skim` is a small tracked launcher, not
-the binary. On first use it downloads the prebuilt binary for your platform from
-the matching GitHub release and **verifies it against the published
-`SHA256SUMS` before running it** — a download whose hash does not match is
-discarded, never executed. It is cached under `~/.claude/skim/bin/`, so this
-happens once per version, not once per session.
-
 Resolution order, first hit wins:
 
 1. `plugin/bin/skim-bin` — a local `make build`, so a source checkout always
    beats a download and you never run a stale artifact while developing
 2. an already-downloaded release binary in the cache
-3. a fresh, checksum-verified download
-4. `go build`, **only when the Go module is actually reachable** — which is
+3. a `skim` binary on `PATH` (e.g. installed via `go install`)
+4. a fresh, checksum-verified download
+5. `go build`, **only when the Go module is actually reachable** — which is
    true for a source checkout run with `--plugin-dir`, and *not* true for an
    installed plugin: `claude plugin install` copies only `plugin/` into
    `~/.claude/plugins/cache/`, with no `go.mod` above it
 
-So for an installed plugin the download is the route that matters, and a
-published release is required for one to work at all.
+So for an installed plugin without Go, the download is the route that matters,
+and a published release is required for one to work at all.
 
 Prebuilt for `darwin/arm64`, `darwin/amd64`, `linux/amd64` and `linux/arm64`.
 Windows is not published: the launcher is a POSIX shell script, so a Windows

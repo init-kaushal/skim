@@ -12,7 +12,7 @@
       "source": "./plugin",
       "displayName": "skim",
       "description": "Token-saving tool-call interceptor for Claude Code.",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "category": "development",
       "author": {
         "name": "Kaushal Sharma"

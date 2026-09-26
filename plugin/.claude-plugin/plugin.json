@@ -1,6 +1,6 @@
 {
   "name": "skim",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Intercepts oversized Read/Grep/Bash tool calls and replaces their output with a compact Haiku-produced digest.",
   "author": {
     "name": "Kaushal Sharma",
