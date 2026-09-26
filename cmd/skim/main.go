@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -42,6 +43,7 @@ commands:
   doctor        environment and config diagnostics
   stats         cumulative interception savings
   config        show or change configuration
+  install-shell add skim to PATH in your shell rc file (--dry-run to preview)
   version       print version
 `
 
@@ -138,6 +140,19 @@ func runWithStdin(stdin io.Reader, args []string, stdout, stderr io.Writer) int 
 		}
 		return 0
 
+	case "install-shell":
+		dryRun := len(args) > 1 && args[1] == "--dry-run"
+		selfDir, err := selfBinDir()
+		if err != nil {
+			fmt.Fprintln(stderr, "skim: could not resolve own directory:", err)
+			return 1
+		}
+		if err := cli.InstallShell(stdout, selfDir, dryRun); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		return 0
+
 	case "version":
 		fmt.Fprintf(stdout, "skim %s\n", version)
 		return 0
@@ -146,6 +161,20 @@ func runWithStdin(stdin io.Reader, args []string, stdout, stderr io.Writer) int 
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
+}
+
+// selfBinDir returns the directory containing the running binary, following
+// any symlinks. Used by install-shell to put the right path on PATH.
+func selfBinDir() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(exe)
+	if err != nil {
+		resolved = exe
+	}
+	return filepath.Dir(resolved), nil
 }
 
 // hookFn is the shared shape of handler.ReadHook / GrepHook / BashHook.

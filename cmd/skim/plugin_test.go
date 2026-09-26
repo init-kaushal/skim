@@ -145,7 +145,7 @@ func TestLauncherDegradesOpenWithoutABinary(t *testing.T) {
 	home := filepath.Join(dir, "skimhome")
 	run := func(arg string) (int, string) {
 		cmd := exec.Command(path, arg)
-		cmd.Env = append(os.Environ(), "SKIM_HOME="+home)
+		cmd.Env = append(os.Environ(), "SKIM_HOME="+home, "SKIM_NO_DOWNLOAD=1")
 		var sb strings.Builder
 		cmd.Stdout, cmd.Stderr = &sb, &sb
 		err := cmd.Run()
