@@ -48,7 +48,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" --clobber \
+          gh release create "$GITHUB_REF_NAME" \
             --title "$GITHUB_REF_NAME" \
             --notes "Prebuilt \`skim\` binaries. The plugin launcher downloads the one matching your platform on first use and verifies it against \`SHA256SUMS\` before running it — no Go toolchain needed.
 
