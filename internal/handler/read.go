@@ -57,6 +57,10 @@ func ReadHook(ctx context.Context, in hookio.Input, d Deps) error {
 		return hookio.Allow(d.Stdout)
 	}
 
+	if st, err := os.Stat(ri.FilePath); err != nil || !st.Mode().IsRegular() {
+		return hookio.Allow(d.Stdout)
+	}
+
 	// Images, PDFs and other binaries are checked before the size threshold so
 	// no binary reaches the worker at any size: the bytes are not valid UTF-8,
 	// the digest would be useless, and denying the Read would stop the model

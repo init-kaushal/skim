@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -129,6 +130,27 @@ func TestReadHook_LargeFile_DeniesWithDigest(t *testing.T) {
 // through even though they are far over the size threshold — a digest of an
 // image is useless, and denying the Read would hide the file from the model
 // entirely.
+func TestReadHook_DirectoryPath_Allows(t *testing.T) {
+	dir := t.TempDir()
+	var out bytes.Buffer
+	d := baseDeps(t, &out)
+	d.Summarize = func(_ context.Context, _ worker.Request) ([]byte, worker.Usage, error) {
+		t.Fatal("worker must not be called for a directory path")
+		return nil, worker.Usage{}, nil
+	}
+	var logged []string
+	d.Logf = func(f string, a ...any) { logged = append(logged, fmt.Sprintf(f, a...)) }
+	if err := ReadHook(context.Background(), readInput(t, dir, 0, 0), d); err != nil {
+		t.Fatal(err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("directory should allow (no output), got %q", out.String())
+	}
+	if len(logged) > 0 {
+		t.Errorf("directory path must not log errors, got: %v", logged)
+	}
+}
+
 func TestReadHook_BinaryFile_Allows(t *testing.T) {
 	dir := t.TempDir()
 	blob := append([]byte("\x89PNG\r\n\x1a\n"), bytes.Repeat([]byte{0x00, 0x01, 0x02, 0x03}, 40000)...)
