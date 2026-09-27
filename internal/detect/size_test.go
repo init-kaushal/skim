@@ -132,11 +132,11 @@ func TestMeasure_PrefixSpansReadBuffer(t *testing.T) {
 }
 
 func TestExceedsThreshold(t *testing.T) {
-	c := config.Default() // 300 lines / 60000 bytes
-	if ExceedsThreshold(300, 100, c) {
+	c := config.Default() // 150 lines / 60000 bytes
+	if ExceedsThreshold(150, 100, c) {
 		t.Error("exactly at line limit should not exceed")
 	}
-	if !ExceedsThreshold(301, 100, c) {
+	if !ExceedsThreshold(151, 100, c) {
 		t.Error("over line limit should exceed")
 	}
 	if !ExceedsThreshold(10, 60001, c) {

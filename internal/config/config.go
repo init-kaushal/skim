@@ -37,7 +37,7 @@ type Config struct {
 func Default() Config {
 	return Config{
 		Disabled:       false,
-		ReadMaxLines:   300,
+		ReadMaxLines:   150,
 		ReadMaxBytes:   60000,
 		GrepMaxMatches: 60,
 		BashNoisyPatterns: []string{

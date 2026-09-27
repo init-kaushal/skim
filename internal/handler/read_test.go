@@ -398,7 +398,7 @@ func TestReadHook_ShortFile_NoPartialBanner(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "mid.go")
 	var sb strings.Builder
-	for i := 0; i < 500; i++ { // over the 300-line threshold, under the 2000 cap
+	for i := 0; i < 500; i++ { // over the 150-line threshold, under the 2000 cap
 		sb.WriteString("0123456789012345678\n")
 	}
 	if err := os.WriteFile(path, []byte(sb.String()), 0o644); err != nil {

@@ -24,7 +24,7 @@ set -u
 
 # SKIM_VERSION is the release whose artifacts this plugin expects. It is kept in
 # step with plugin/.claude-plugin/plugin.json by TestLauncherVersionMatchesManifest.
-SKIM_VERSION="0.1.3"
+SKIM_VERSION="0.1.4"
 SKIM_REPO="init-kaushal/skim"
 
 BIN_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
