@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/kaushal/skim/internal/config"
+	"github.com/kaushal/skim/internal/cost"
 	"github.com/kaushal/skim/internal/decision"
 	"github.com/kaushal/skim/internal/digest"
 	"github.com/kaushal/skim/internal/hookio"
@@ -50,15 +51,21 @@ type Deps struct {
 	// threshold-only decisions (backward-compatible behaviour).
 	Engine *decision.Engine
 
+	// Calibration holds compression performance history used for the telemetry
+	// feedback loop: after every worker call we record the actual compression
+	// ratio so future predictions improve. When nil, no feedback is recorded.
+	Calibration *cost.Calibration
+
 	// ObserveRecord logs a routing decision. Usually observe.Record.
 	// When nil, decisions are not logged (no explain output, but still works).
 	ObserveRecord func(observe.Entry)
 }
 
-// applyUsage copies a worker call's billing into a metrics entry. Kept in one
-// place so every intercepting path records the same fields: the per-tier counts
-// are what make the cost figure auditable after the fact, and the flat sum is
-// retained only as a size diagnostic.
+// applyUsage copies a worker call's billing into a metrics entry and optionally
+// records the actual compression ratio into the calibration system for the
+// telemetry feedback loop. kind identifies the compressor (e.g. "go_test") or
+// "" for a generic worker call. workerInputTokens is the content-only token
+// count (before system overhead) used to compute the ratio.
 func applyUsage(e *metrics.Entry, u worker.Usage) {
 	e.WorkerTokens = u.Tokens()
 	e.WorkerInputTokens = u.InputTokens
@@ -66,4 +73,14 @@ func applyUsage(e *metrics.Entry, u worker.Usage) {
 	e.WorkerCacheWriteTokens = u.CacheWriteTokens
 	e.WorkerCacheReadTokens = u.CacheReadTokens
 	e.WorkerCostUSD = u.CostUSD
+}
+
+// recordCalibration feeds actual worker output into the calibration system.
+// contentTokens is the token count of the content sent to the worker (excluding
+// system prompt overhead). If cal is nil, this is a no-op.
+func recordCalibration(cal *cost.Calibration, kind string, contentTokens, outputTokens int) {
+	if cal == nil || contentTokens <= 0 {
+		return
+	}
+	cal.RecordActual(kind, contentTokens, outputTokens)
 }

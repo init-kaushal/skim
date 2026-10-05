@@ -108,7 +108,9 @@ func ReadHook(ctx context.Context, in hookio.Input, d Deps) error {
 			DryRun:           d.Cfg.DryRun,
 			EstOrigCostUSD:   plan.CostDecision.EstOrigCostUSD,
 			EstWorkerCostUSD: plan.CostDecision.EstWorkerCostUSD,
-			EstSavingsUSD:    plan.CostDecision.EstSavingsUSD,
+			EstNetSavingsUSD: plan.CostDecision.EstSavingsUSD,
+			PredictedRatio:   plan.PredictedRatio,
+			ReuseCount:       plan.ReuseCount,
 			Reason:           plan.Reason,
 		}
 		if d.ObserveRecord != nil {
@@ -153,22 +155,30 @@ func ReadHook(ctx context.Context, in hookio.Input, d Deps) error {
 			}
 			fm = parsed
 			_ = d.CachePut(contentKey, fm)
+
+			// Telemetry feedback: record actual compression ratio so future
+			// predictions improve. Content tokens (no system overhead) vs output.
+			contentTokens := metrics.EstimateTokens(len(content))
+			recordCalibration(d.Calibration, "", contentTokens, use.OutputTokens)
 		}
 
 		reason := digest.RenderFileMap(fm, ri.FilePath, quoteSelfIfNeeded(execPath()), cov)
 		origEst := metrics.EstimateTokens(sz.PrefixBytes)
 		digEst := metrics.EstimateTokens(len(reason))
 		entry := metrics.Entry{
-			TS:              d.Now().UTC().Format(time.RFC3339),
-			Tool:            "Read",
-			Strategy:        string(plan.Strategy),
-			OrigTokensEst:   origEst,
-			DigestTokensEst: digEst,
-			SavedEst:        origEst - digEst,
-			CacheHit:        metrics.Miss(),
+			TS:                        d.Now().UTC().Format(time.RFC3339),
+			Tool:                      "Read",
+			Strategy:                  string(plan.Strategy),
+			OrigTokensEst:             origEst,
+			DigestTokensEst:           digEst,
+			SavedEst:                  origEst - digEst,
+			CacheHit:                  metrics.Miss(),
+			PredictedCompressionRatio: plan.PredictedRatio,
 		}
 		if hit {
 			entry.CacheHit = metrics.Hit()
+		} else if entry.WorkerInputTokens > 0 && use.OutputTokens > 0 {
+			entry.ActualCompressionRatio = float64(use.OutputTokens) / float64(entry.WorkerInputTokens)
 		}
 		applyUsage(&entry, use)
 		d.Record(entry)

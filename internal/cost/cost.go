@@ -86,6 +86,13 @@ func Evaluate(
 	session := pricingFor(sessionModel)
 	wkr := pricingFor(workerModel)
 
+	if origTokens <= 0 {
+		return Decision{
+			Strategy: StrategyPassthrough,
+			Reason:   "content too small to cost anything",
+		}
+	}
+
 	// The "direct cost" is what those tokens cost if they ride along in the
 	// session's context. We use input pricing because in the compounding model,
 	// every future turn re-sends the cached prefix at the cache-read rate; here
@@ -95,11 +102,18 @@ func Evaluate(
 	workerCostUSD := usd(workerInputTokens, wkr.InputPer1M) +
 		usd(workerOutputTokens, wkr.OutputPer1M)
 
-	// We don't know the compressed output size yet; rough estimate: 15% of input.
-	compressedTokens := origTokens / 7
+	// The worker output IS the compressed content that enters the session context
+	// — the digest replaces the original. workerOutputTokens must be set by the
+	// caller using calibration data (see decision.Engine.PlanRead).
+	compressedTokens := workerOutputTokens
 	savedTokens := origTokens - compressedTokens
-	if savedTokens < 0 {
-		savedTokens = 0
+	if savedTokens <= 0 {
+		return Decision{
+			Strategy:         StrategyDirect,
+			EstOrigCostUSD:   origCostUSD,
+			EstWorkerCostUSD: workerCostUSD,
+			Reason:           "worker output ≥ original: no savings possible",
+		}
 	}
 	estimatedSavingsUSD := usd(savedTokens, session.InputPer1M)
 	netSavingsUSD := estimatedSavingsUSD - workerCostUSD

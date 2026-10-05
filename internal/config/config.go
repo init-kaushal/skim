@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 
+	"github.com/kaushal/skim/internal/cost"
 	"github.com/kaushal/skim/internal/paths"
 )
 
@@ -46,6 +47,13 @@ type Config struct {
 	// DryRun runs the decision engine but always allows the tool call through.
 	// Decisions are still logged to decisions.jsonl for `skim explain`.
 	DryRun bool `json:"dry_run"`
+
+	// ModelPricingOverrides overrides pricing for specific models. Useful when
+	// Anthropic changes prices or you have committed pricing from a contract.
+	// Keys must match the model IDs used in Model and SessionModel.
+	// Overrides are merged into KnownPricing at startup; unset models keep defaults.
+	// Example: {"claude-opus-5-5": {"input_per_1m": 12.00, "output_per_1m": 60.00, ...}}
+	ModelPricingOverrides map[string]cost.ModelPricing `json:"model_pricing_overrides,omitempty"`
 }
 
 func Default() Config {

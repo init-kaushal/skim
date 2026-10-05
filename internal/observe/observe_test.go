@@ -115,7 +115,7 @@ func TestFormat_Output(t *testing.T) {
 		Strategy:         cost.StrategyCheapWorker,
 		EstOrigCostUSD:   0.0042,
 		EstWorkerCostUSD: 0.0006,
-		EstSavingsUSD:    0.0036,
+		EstNetSavingsUSD: 0.0036,
 		Reason:           "savings justify cost",
 	}
 	observe.Format(&buf, e)

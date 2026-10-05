@@ -13,6 +13,7 @@ import (
 	"github.com/kaushal/skim/internal/cache"
 	"github.com/kaushal/skim/internal/cli"
 	"github.com/kaushal/skim/internal/config"
+	"github.com/kaushal/skim/internal/cost"
 	"github.com/kaushal/skim/internal/decision"
 	"github.com/kaushal/skim/internal/handler"
 	"github.com/kaushal/skim/internal/hookio"
@@ -45,6 +46,7 @@ commands:
   doctor        environment and config diagnostics
   stats         cumulative interception savings
   explain       show why recent operations were (or weren't) optimized
+  pricing       show model pricing and calibration data
   config        show or change configuration
   install-shell add skim to PATH in your shell rc file (--dry-run to preview)
   version       print version
@@ -128,6 +130,14 @@ func runWithStdin(stdin io.Reader, args []string, stdout, stderr io.Writer) int 
 
 	case "explain":
 		if err := cli.Explain(stdout, args[1:]); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		return 0
+
+	case "pricing":
+		cfg := loadConfigOrDefault(nil)
+		if err := cli.Pricing(stdout, cost.LoadCalibration(), cfg); err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
@@ -222,6 +232,18 @@ func hookMain(stdin io.Reader, stdout io.Writer, fn hookFn) int {
 	// Best-effort GC of stale digest cache entries; failures are non-fatal.
 	_, _ = cache.Sweep(7 * 24 * time.Hour)
 
+	// Apply any user-defined pricing overrides from config before wiring deps.
+	for model, p := range cfg.ModelPricingOverrides {
+		cost.KnownPricing[model] = p
+	}
+
+	cal := cost.LoadCalibration()
+	eng := decision.New(cfg)
+	// Share calibration between the engine (for predictions) and deps (for
+	// recording actuals). They are the same pointer so updates from one are
+	// visible to the other within the same invocation.
+	eng.Cal = cal
+
 	d := handler.Deps{
 		Cfg:           cfg,
 		Env:           os.Getenv,
@@ -235,7 +257,8 @@ func hookMain(stdin io.Reader, stdout io.Writer, fn hookFn) int {
 		Stdout:        stdout,
 		CountMatches:  rg.Count,
 		Sample:        rg.Sample,
-		Engine:        decision.New(cfg),
+		Engine:        eng,
+		Calibration:   cal,
 		ObserveRecord: observe.Record,
 	}
 	_ = fn(context.Background(), in, d)

@@ -38,6 +38,15 @@ type Entry struct {
 	// CLI itself. This is the only figure that can be weighed against a saving.
 	WorkerCostUSD float64 `json:"worker_cost_usd,omitempty"`
 
+	// PredictedCompressionRatio is the output_tokens/input_tokens estimate used
+	// in the interception decision (from calibration or DefaultOutputRatio).
+	PredictedCompressionRatio float64 `json:"predicted_compression_ratio,omitempty"`
+
+	// ActualCompressionRatio is the observed output_tokens/input_tokens from
+	// the worker call. Recorded to feed back into the calibration system.
+	// Zero for cache hits and deterministic compressions.
+	ActualCompressionRatio float64 `json:"actual_compression_ratio,omitempty"`
+
 	// CacheHit is three-state on purpose. nil means this path has no digest
 	// cache at all, which is true of Grep and Bash — counting them as misses
 	// made the reported hit rate meaningless (one Read plus three Bash

@@ -70,7 +70,8 @@ func GrepHook(ctx context.Context, in hookio.Input, d Deps) error {
 			DryRun:           d.Cfg.DryRun,
 			EstOrigCostUSD:   plan.CostDecision.EstOrigCostUSD,
 			EstWorkerCostUSD: plan.CostDecision.EstWorkerCostUSD,
-			EstSavingsUSD:    plan.CostDecision.EstSavingsUSD,
+			EstNetSavingsUSD: plan.CostDecision.EstSavingsUSD,
+			PredictedRatio:   plan.PredictedRatio,
 			Reason:           plan.Reason,
 		}
 		if d.ObserveRecord != nil {
