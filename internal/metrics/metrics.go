@@ -17,6 +17,9 @@ import (
 type Entry struct {
 	TS              string `json:"ts"`
 	Tool            string `json:"tool"`
+	// Strategy is the routing decision that produced this entry (Phase 1+).
+	// Empty on entries written before Phase 1 (backward compatible).
+	Strategy        string `json:"strategy,omitempty"`
 	OrigTokensEst   int    `json:"orig_tokens_est"`
 	DigestTokensEst int    `json:"digest_tokens_est"`
 	SavedEst        int    `json:"saved_est"`

@@ -29,6 +29,17 @@ func Key(path, model string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// KeyFromContent produces a cache key from file content rather than from
+// path+mtime. This avoids cache misses when a file is moved, renamed, or
+// touched by git without changing its content, and enables cross-path
+// deduplication for identical files at different locations.
+func KeyFromContent(content []byte, model string) string {
+	h := sha256.New()
+	h.Write(content)
+	fmt.Fprintf(h, "\x00%s\x00%s", model, strconv.Itoa(digest.SchemaVersion))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 func file(key string) string { return filepath.Join(paths.CacheDir(), key+".json") }
 
 func Get(key string) (digest.FileMap, bool) {

@@ -4,9 +4,11 @@ import (
 	"context"
 	"time"
 
+	"github.com/kaushal/skim/internal/cost"
 	"github.com/kaushal/skim/internal/digest"
 	"github.com/kaushal/skim/internal/hookio"
 	"github.com/kaushal/skim/internal/metrics"
+	"github.com/kaushal/skim/internal/observe"
 	"github.com/kaushal/skim/internal/worker"
 )
 
@@ -56,6 +58,27 @@ func GrepHook(ctx context.Context, in hookio.Input, d Deps) error {
 	if err != nil {
 		d.Logf("grep-hook: sample: %v", err)
 		return hookio.Allow(d.Stdout)
+	}
+
+	// Phase 1: cost engine check before making the worker call.
+	if d.Engine != nil {
+		plan := d.Engine.PlanGrep(sample, fullBytes)
+		obs := observe.Entry{
+			Tool:             "Grep",
+			Target:           gi.Pattern,
+			Strategy:         plan.Strategy,
+			DryRun:           d.Cfg.DryRun,
+			EstOrigCostUSD:   plan.CostDecision.EstOrigCostUSD,
+			EstWorkerCostUSD: plan.CostDecision.EstWorkerCostUSD,
+			EstSavingsUSD:    plan.CostDecision.EstSavingsUSD,
+			Reason:           plan.Reason,
+		}
+		if d.ObserveRecord != nil {
+			d.ObserveRecord(obs)
+		}
+		if d.Cfg.DryRun || plan.Strategy == cost.StrategyDirect || plan.Strategy == cost.StrategyPassthrough {
+			return hookio.Allow(d.Stdout)
+		}
 	}
 
 	raw, use, err := d.Summarize(ctx, worker.Request{

@@ -13,9 +13,11 @@ import (
 	"github.com/kaushal/skim/internal/cache"
 	"github.com/kaushal/skim/internal/cli"
 	"github.com/kaushal/skim/internal/config"
+	"github.com/kaushal/skim/internal/decision"
 	"github.com/kaushal/skim/internal/handler"
 	"github.com/kaushal/skim/internal/hookio"
 	"github.com/kaushal/skim/internal/metrics"
+	"github.com/kaushal/skim/internal/observe"
 	"github.com/kaushal/skim/internal/paths"
 	"github.com/kaushal/skim/internal/rg"
 	"github.com/kaushal/skim/internal/runner"
@@ -42,6 +44,7 @@ commands:
   demo [dir]    write a sample file big enough to trigger interception
   doctor        environment and config diagnostics
   stats         cumulative interception savings
+  explain       show why recent operations were (or weren't) optimized
   config        show or change configuration
   install-shell add skim to PATH in your shell rc file (--dry-run to preview)
   version       print version
@@ -118,6 +121,13 @@ func runWithStdin(stdin io.Reader, args []string, stdout, stderr io.Writer) int 
 
 	case "stats":
 		if err := cli.Stats(stdout, args[1:]); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		return 0
+
+	case "explain":
+		if err := cli.Explain(stdout, args[1:]); err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
@@ -213,18 +223,20 @@ func hookMain(stdin io.Reader, stdout io.Writer, fn hookFn) int {
 	_, _ = cache.Sweep(7 * 24 * time.Hour)
 
 	d := handler.Deps{
-		Cfg:          cfg,
-		Env:          os.Getenv,
-		Summarize:    worker.Run,
-		CacheKey:     cache.Key,
-		CacheGet:     cache.Get,
-		CachePut:     cache.Put,
-		Record:       func(e metrics.Entry) { _ = metrics.Record(e) },
-		Logf:         logf,
-		Now:          time.Now,
-		Stdout:       stdout,
-		CountMatches: rg.Count,
-		Sample:       rg.Sample,
+		Cfg:           cfg,
+		Env:           os.Getenv,
+		Summarize:     worker.Run,
+		CacheKey:      cache.Key,
+		CacheGet:      cache.Get,
+		CachePut:      cache.Put,
+		Record:        func(e metrics.Entry) { _ = metrics.Record(e) },
+		Logf:          logf,
+		Now:           time.Now,
+		Stdout:        stdout,
+		CountMatches:  rg.Count,
+		Sample:        rg.Sample,
+		Engine:        decision.New(cfg),
+		ObserveRecord: observe.Record,
 	}
 	_ = fn(context.Background(), in, d)
 	return 0

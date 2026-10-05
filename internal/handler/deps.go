@@ -6,9 +6,11 @@ import (
 	"time"
 
 	"github.com/kaushal/skim/internal/config"
+	"github.com/kaushal/skim/internal/decision"
 	"github.com/kaushal/skim/internal/digest"
 	"github.com/kaushal/skim/internal/hookio"
 	"github.com/kaushal/skim/internal/metrics"
+	"github.com/kaushal/skim/internal/observe"
 	"github.com/kaushal/skim/internal/worker"
 )
 
@@ -43,6 +45,14 @@ type Deps struct {
 	// only a Grep that clears the threshold needs a sample, and gathering one
 	// costs a second full rg pass. An error degrades open, same as CountMatches.
 	Sample func(gi hookio.GrepInput) (sample string, fullBytes int, err error)
+
+	// Engine is the cost-aware routing engine. When nil, hooks fall back to
+	// threshold-only decisions (backward-compatible behaviour).
+	Engine *decision.Engine
+
+	// ObserveRecord logs a routing decision. Usually observe.Record.
+	// When nil, decisions are not logged (no explain output, but still works).
+	ObserveRecord func(observe.Entry)
 }
 
 // applyUsage copies a worker call's billing into a metrics entry. Kept in one
