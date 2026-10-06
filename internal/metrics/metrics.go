@@ -17,6 +17,9 @@ import (
 type Entry struct {
 	TS              string `json:"ts"`
 	Tool            string `json:"tool"`
+	// Strategy is the routing decision that produced this entry (Phase 1+).
+	// Empty on entries written before Phase 1 (backward compatible).
+	Strategy        string `json:"strategy,omitempty"`
 	OrigTokensEst   int    `json:"orig_tokens_est"`
 	DigestTokensEst int    `json:"digest_tokens_est"`
 	SavedEst        int    `json:"saved_est"`
@@ -34,6 +37,15 @@ type Entry struct {
 	// WorkerCostUSD is what the nested call actually billed, as reported by the
 	// CLI itself. This is the only figure that can be weighed against a saving.
 	WorkerCostUSD float64 `json:"worker_cost_usd,omitempty"`
+
+	// PredictedCompressionRatio is the output_tokens/input_tokens estimate used
+	// in the interception decision (from calibration or DefaultOutputRatio).
+	PredictedCompressionRatio float64 `json:"predicted_compression_ratio,omitempty"`
+
+	// ActualCompressionRatio is the observed output_tokens/input_tokens from
+	// the worker call. Recorded to feed back into the calibration system.
+	// Zero for cache hits and deterministic compressions.
+	ActualCompressionRatio float64 `json:"actual_compression_ratio,omitempty"`
 
 	// CacheHit is three-state on purpose. nil means this path has no digest
 	// cache at all, which is true of Grep and Bash — counting them as misses

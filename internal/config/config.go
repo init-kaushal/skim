@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 
+	"github.com/kaushal/skim/internal/cost"
 	"github.com/kaushal/skim/internal/paths"
 )
 
@@ -32,6 +33,27 @@ type Config struct {
 	PassthroughGlobs  []string `json:"passthrough_globs"`
 	Model             string   `json:"model"`
 	WorkerTimeoutSec  int      `json:"worker_timeout_sec"`
+
+	// Cost-aware routing (Phase 1)
+	// SessionModel is the Claude Code session model used to price savings.
+	// Defaults to claude-opus-5-5 (the most common expensive model).
+	SessionModel string `json:"session_model"`
+	// SafetyMargin multiplies the worker cost before comparing to expected
+	// savings. 1.5 means we only intercept when savings are 50% more than cost.
+	SafetyMargin float64 `json:"safety_margin"`
+	// MinSavingsUSD is the minimum net saving (savings − worker_cost) required
+	// to justify an interception. Prevents micro-interceptions.
+	MinSavingsUSD float64 `json:"min_savings_usd"`
+	// DryRun runs the decision engine but always allows the tool call through.
+	// Decisions are still logged to decisions.jsonl for `skim explain`.
+	DryRun bool `json:"dry_run"`
+
+	// ModelPricingOverrides overrides pricing for specific models. Useful when
+	// Anthropic changes prices or you have committed pricing from a contract.
+	// Keys must match the model IDs used in Model and SessionModel.
+	// Overrides are merged into KnownPricing at startup; unset models keep defaults.
+	// Example: {"claude-opus-5-5": {"input_per_1m": 12.00, "output_per_1m": 60.00, ...}}
+	ModelPricingOverrides map[string]cost.ModelPricing `json:"model_pricing_overrides,omitempty"`
 }
 
 func Default() Config {
@@ -47,6 +69,10 @@ func Default() Config {
 		PassthroughGlobs: []string{"**/*.md", "**/go.mod", ".claude/**"},
 		Model:            "claude-haiku-4-5-20251001",
 		WorkerTimeoutSec: 45,
+		SessionModel:     "claude-opus-5-5",
+		SafetyMargin:     1.5,
+		MinSavingsUSD:    0.001,
+		DryRun:           false,
 	}
 }
 
@@ -83,6 +109,12 @@ func (c Config) Validate() error {
 	if c.ReadMaxLines <= 0 || c.ReadMaxBytes <= 0 ||
 		c.GrepMaxMatches <= 0 || c.WorkerTimeoutSec <= 0 {
 		return errors.New("thresholds and timeout must be > 0")
+	}
+	if c.SafetyMargin < 0 {
+		return errors.New("safety_margin must be >= 0")
+	}
+	if c.MinSavingsUSD < 0 {
+		return errors.New("min_savings_usd must be >= 0")
 	}
 	// A worker allowed to outlive the hook timeout skim declares for itself
 	// gets killed by the harness mid-call instead of degrading open cleanly.

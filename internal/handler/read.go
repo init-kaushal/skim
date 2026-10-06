@@ -6,10 +6,13 @@ import (
 	"os"
 	"time"
 
+	"github.com/kaushal/skim/internal/cache"
+	"github.com/kaushal/skim/internal/cost"
 	"github.com/kaushal/skim/internal/detect"
 	"github.com/kaushal/skim/internal/digest"
 	"github.com/kaushal/skim/internal/hookio"
 	"github.com/kaushal/skim/internal/metrics"
+	"github.com/kaushal/skim/internal/observe"
 	"github.com/kaushal/skim/internal/worker"
 )
 
@@ -85,6 +88,104 @@ func ReadHook(ctx context.Context, in hookio.Input, d Deps) error {
 	// by the Read-tool-matching line cap and then by the byte backstop.
 	seen := min(sz.PrefixBytes, maxWorkerInputBytes)
 
+	// Phase 1: cost-aware routing via the decision engine. When the engine is
+	// wired in, we read the file once and let the engine decide whether the
+	// worker call is worth its cost. Falls back to the threshold-only path
+	// (engine == nil) for backward compatibility with tests that don't wire it.
+	if d.Engine != nil {
+		content, rerr := readCapped(ri.FilePath, seen)
+		if rerr != nil {
+			d.Logf("read-hook: read %s: %v", ri.FilePath, rerr)
+			return hookio.Allow(d.Stdout)
+		}
+
+		plan := d.Engine.PlanRead(ri.FilePath, content, sz.Lines, len(content))
+
+		obs := observe.Entry{
+			Tool:             "Read",
+			Target:           ri.FilePath,
+			Strategy:         plan.Strategy,
+			DryRun:           d.Cfg.DryRun,
+			EstOrigCostUSD:   plan.CostDecision.EstOrigCostUSD,
+			EstWorkerCostUSD: plan.CostDecision.EstWorkerCostUSD,
+			EstNetSavingsUSD: plan.CostDecision.EstSavingsUSD,
+			PredictedRatio:   plan.PredictedRatio,
+			ReuseCount:       plan.ReuseCount,
+			Reason:           plan.Reason,
+		}
+		if d.ObserveRecord != nil {
+			d.ObserveRecord(obs)
+		}
+
+		if d.Cfg.DryRun || plan.Strategy == cost.StrategyDirect || plan.Strategy == cost.StrategyPassthrough {
+			return hookio.Allow(d.Stdout)
+		}
+
+		// Cost engine says intercept: use content-hash key for cache lookup.
+		contentKey := cache.KeyFromContent([]byte(content), d.Cfg.Model)
+
+		cov := digest.Coverage{
+			SeenBytes: seen, TotalBytes: sz.Bytes,
+			SeenLines: min(sz.Lines, maxWorkerInputLines), TotalLines: sz.Lines,
+		}
+
+		var fm digest.FileMap
+		var use worker.Usage
+		hit := false
+		fm, hit = d.CacheGet(contentKey)
+
+		if !hit {
+			raw, u, werr := d.Summarize(ctx, worker.Request{
+				Model:   d.Cfg.Model,
+				Kind:    worker.KindFileMap,
+				Content: content,
+				Meta:    ri.FilePath,
+				Timeout: time.Duration(d.Cfg.WorkerTimeoutSec) * time.Second,
+				Partial: cov.Partial(),
+			})
+			if werr != nil {
+				d.Logf("read-hook: worker %s: %v", ri.FilePath, werr)
+				return hookio.Allow(d.Stdout)
+			}
+			use = u
+			parsed, perr := digest.ParseFileMap(raw)
+			if perr != nil {
+				d.Logf("read-hook: parse digest %s: %v", ri.FilePath, perr)
+				return hookio.Allow(d.Stdout)
+			}
+			fm = parsed
+			_ = d.CachePut(contentKey, fm)
+
+			// Telemetry feedback: record actual compression ratio so future
+			// predictions improve. Content tokens (no system overhead) vs output.
+			contentTokens := metrics.EstimateTokens(len(content))
+			recordCalibration(d.Calibration, "", contentTokens, use.OutputTokens)
+		}
+
+		reason := digest.RenderFileMap(fm, ri.FilePath, quoteSelfIfNeeded(execPath()), cov)
+		origEst := metrics.EstimateTokens(sz.PrefixBytes)
+		digEst := metrics.EstimateTokens(len(reason))
+		entry := metrics.Entry{
+			TS:                        d.Now().UTC().Format(time.RFC3339),
+			Tool:                      "Read",
+			Strategy:                  string(plan.Strategy),
+			OrigTokensEst:             origEst,
+			DigestTokensEst:           digEst,
+			SavedEst:                  origEst - digEst,
+			CacheHit:                  metrics.Miss(),
+			PredictedCompressionRatio: plan.PredictedRatio,
+		}
+		if hit {
+			entry.CacheHit = metrics.Hit()
+		} else if entry.WorkerInputTokens > 0 && use.OutputTokens > 0 {
+			entry.ActualCompressionRatio = float64(use.OutputTokens) / float64(entry.WorkerInputTokens)
+		}
+		applyUsage(&entry, use)
+		d.Record(entry)
+		return hookio.Deny(d.Stdout, reason)
+	}
+
+	// Legacy path (no engine wired): threshold-only decision, mtime-based cache key.
 	key := ""
 	if k, kerr := d.CacheKey(ri.FilePath, d.Cfg.Model); kerr == nil {
 		key = k
@@ -139,10 +240,6 @@ func ReadHook(ctx context.Context, in hookio.Input, d Deps) error {
 	}
 
 	reason := digest.RenderFileMap(fm, ri.FilePath, quoteSelfIfNeeded(execPath()), cov)
-	// The saving is measured against what allowing the call would actually have
-	// put in the context — Claude Code's Read returns at most maxWorkerInputLines
-	// lines, so that prefix is the baseline, not the whole file. Using sz.Bytes
-	// here would book savings for bytes that were never going to arrive.
 	origEst := metrics.EstimateTokens(sz.PrefixBytes)
 	digEst := metrics.EstimateTokens(len(reason))
 	entry := metrics.Entry{
