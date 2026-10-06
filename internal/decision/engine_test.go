@@ -1,6 +1,7 @@
 package decision_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -85,7 +86,41 @@ func TestPlanRun_UnknownOutput_UsesWorker(t *testing.T) {
 	}
 }
 
-// TestPlanRun_PartialCompressionNoWorkerWhenCostSaysNo verifies the fix for
+// TestPlanRead_DeterministicForValidGoFile verifies that a real Go source file
+// (one with a valid package declaration) routes to DETERMINISTIC, not the worker.
+func TestPlanRead_DeterministicForValidGoFile(t *testing.T) {
+	e := testEngine()
+
+	// Well-formed Go source that exceeds the default threshold. Use enough lines
+	// to pass ExceedsThreshold but also be real Go so the parser produces a map.
+	var sb strings.Builder
+	sb.WriteString("package bench\n\nimport \"fmt\"\n\n")
+	for i := 0; i < 300; i++ {
+		fmt.Fprintf(&sb, "func F%d() string { return \"value%d\" }\n", i, i)
+	}
+	src := sb.String()
+
+	p := e.PlanRead("/tmp/bench.go", src, strings.Count(src, "\n"), len(src))
+	if p.Strategy != cost.StrategyDeterministic {
+		t.Errorf("expected DETERMINISTIC for valid Go file, got %s: %s", p.Strategy, p.Reason)
+	}
+	if p.DeterministicFileMap == nil {
+		t.Error("DeterministicFileMap must be set for DETERMINISTIC plan")
+	}
+}
+
+// TestPlanRead_PartialGoFileFallsThrough verifies that invalid Go content (no
+// package declaration) does NOT trigger the deterministic path.
+func TestPlanRead_PartialGoFileFallsThrough(t *testing.T) {
+	e := testEngine()
+	content := strings.Repeat("x\n", 300)
+	p := e.PlanRead("/tmp/notgo.go", content, 300, len(content))
+	if p.Strategy == cost.StrategyDeterministic {
+		t.Errorf("invalid Go content should not get DETERMINISTIC, got %s", p.Strategy)
+	}
+}
+
+// TestPlanRead_PartialCompressionNoWorkerWhenCostSaysNo verifies the fix for
 // the decision consistency bug: when the cost engine returns ShouldIntercept=false,
 // a partial deterministic reduction must NOT force a CHEAP_WORKER call.
 func TestPlanRun_PartialCompressionNoWorkerWhenCostSaysNo(t *testing.T) {
