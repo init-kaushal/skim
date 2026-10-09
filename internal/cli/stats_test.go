@@ -133,6 +133,71 @@ func TestStats_CachelessToolsExcludedFromHitRate(t *testing.T) {
 	}
 }
 
+// TestStats_StrategyBreakdown is the regression guard for the per-strategy
+// table: each routing tier must appear exactly once with the right counts and
+// costs, so skim explain, calibration, and savings estimates stay honest.
+func TestStats_StrategyBreakdown(t *testing.T) {
+	t.Setenv("SKIM_HOME", t.TempDir())
+
+	entries := []metrics.Entry{
+		// Three deterministic reads — zero worker cost.
+		{Tool: "Read", Strategy: "DETERMINISTIC", SavedEst: 1000, CacheHit: metrics.Miss()},
+		{Tool: "Read", Strategy: "DETERMINISTIC", SavedEst: 1200, CacheHit: metrics.Miss()},
+		{Tool: "Read", Strategy: "DETERMINISTIC", SavedEst: 800, CacheHit: metrics.Hit()},
+		// Two cheap-worker reads.
+		{Tool: "Read", Strategy: "CHEAP_WORKER", SavedEst: 5000, WorkerCostUSD: 0.002, CacheHit: metrics.Miss()},
+		{Tool: "Read", Strategy: "CHEAP_WORKER", SavedEst: 4000, WorkerCostUSD: 0.0018, CacheHit: metrics.Miss()},
+		// One escalated (normal-worker) read.
+		{Tool: "Read", Strategy: "NORMAL_WORKER", SavedEst: 8000, WorkerCostUSD: 0.009, CacheHit: metrics.Miss()},
+	}
+	for _, e := range entries {
+		if err := metrics.Record(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var out bytes.Buffer
+	if err := Stats(&out, []string{"--session-model", "opus-5", "--turns", "0"}); err != nil {
+		t.Fatal(err)
+	}
+	s := out.String()
+
+	// Strategy breakdown table must appear.
+	if !strings.Contains(s, "strategy") {
+		t.Fatalf("expected strategy breakdown table:\n%s", s)
+	}
+
+	// Each tier must appear with its count.
+	for _, want := range []string{"DETERMINISTIC", "CHEAP_WORKER", "NORMAL_WORKER"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("expected %q in output:\n%s", want, s)
+		}
+	}
+
+	// Deterministic: 3 reads, zero worker cost.
+	if !strings.Contains(s, "no worker — AST/regex") {
+		t.Errorf("expected deterministic note in output:\n%s", s)
+	}
+}
+
+// TestStats_StrategyBreakdown_NoneWhenMissing ensures the strategy section is
+// omitted entirely when no entries carry a Strategy field (pre-Phase-1 logs).
+func TestStats_StrategyBreakdown_NoneWhenMissing(t *testing.T) {
+	t.Setenv("SKIM_HOME", t.TempDir())
+	// Legacy entries have no Strategy field.
+	metrics.Record(metrics.Entry{Tool: "Read", SavedEst: 5000, CacheHit: metrics.Miss()})
+
+	var out bytes.Buffer
+	if err := Stats(&out, nil); err != nil {
+		t.Fatal(err)
+	}
+	s := out.String()
+	// Strategy table must not appear — no entries have a Strategy field.
+	if strings.Contains(s, "DETERMINISTIC") || strings.Contains(s, "CHEAP_WORKER") {
+		t.Errorf("strategy table must not appear for legacy entries:\n%s", s)
+	}
+}
+
 func TestStats_UnknownSessionModel(t *testing.T) {
 	t.Setenv("SKIM_HOME", t.TempDir())
 	var out bytes.Buffer
