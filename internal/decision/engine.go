@@ -9,6 +9,8 @@ import (
 	"github.com/kaushal/skim/internal/compress"
 	"github.com/kaushal/skim/internal/config"
 	"github.com/kaushal/skim/internal/cost"
+	"github.com/kaushal/skim/internal/digest"
+	"github.com/kaushal/skim/internal/filemap"
 	"github.com/kaushal/skim/internal/metrics"
 	"github.com/kaushal/skim/internal/session"
 )
@@ -23,10 +25,14 @@ type Plan struct {
 	// ReuseCount is the number of times this target has been seen in the current
 	// session (1 = first time, 2 = second time seen, etc.). Zero if session
 	// tracking is not available.
-	ReuseCount     int
+	ReuseCount int
 	// PredictedRatio is the output_tokens/input_tokens estimate used for cost
 	// math. Carried through so observe entries can record it for telemetry.
 	PredictedRatio float64
+	// DeterministicFileMap is set when the plan uses the DETERMINISTIC strategy
+	// for a Read interception — the file map was built from the AST without a
+	// worker call. Nil for all other strategies.
+	DeterministicFileMap *digest.FileMap
 }
 
 // Engine produces Plans. It is initialized with calibration data and session
@@ -75,6 +81,19 @@ func (e *Engine) PlanRead(filePath, content string, lines, bytes int) Plan {
 	reuseCount := 0
 	if e.Ses != nil {
 		reuseCount = e.Ses.RecordRead(filePath)
+	}
+
+	// Deterministic tier: try to produce a file map from the AST before paying
+	// for a worker call. For supported file types (currently .go), this is free,
+	// instant, and produces the same FileMap schema the worker would return.
+	if fm, ok := filemap.Generate(content, filePath); ok {
+		return Plan{
+			Strategy:             cost.StrategyDeterministic,
+			DeterministicFileMap: &fm,
+			WorkerInput:          content,
+			Reason:               "go/ast file map — no worker needed",
+			ReuseCount:           reuseCount,
+		}
 	}
 
 	origTokens := metrics.EstimateTokens(bytes)

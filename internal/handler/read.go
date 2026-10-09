@@ -121,17 +121,40 @@ func ReadHook(ctx context.Context, in hookio.Input, d Deps) error {
 			return hookio.Allow(d.Stdout)
 		}
 
-		// Cost engine says intercept: use content-hash key for cache lookup.
-		contentKey := cache.KeyFromContent([]byte(content), d.Cfg.Model)
-
 		cov := digest.Coverage{
 			SeenBytes: seen, TotalBytes: sz.Bytes,
 			SeenLines: min(sz.Lines, maxWorkerInputLines), TotalLines: sz.Lines,
 		}
 
+		// Deterministic tier: AST-generated file map — free, no worker, no cache
+		// lookup needed. We do cache the result so subsequent reads of the same
+		// content skip re-parsing.
+		if plan.Strategy == cost.StrategyDeterministic && plan.DeterministicFileMap != nil {
+			detKey := cache.KeyFromContent([]byte(content), "deterministic")
+			_ = d.CachePut(detKey, *plan.DeterministicFileMap)
+
+			reason := digest.RenderFileMap(*plan.DeterministicFileMap, ri.FilePath, quoteSelfIfNeeded(execPath()), cov)
+			origEst := metrics.EstimateTokens(sz.PrefixBytes)
+			digEst := metrics.EstimateTokens(len(reason))
+			d.Record(metrics.Entry{
+				TS:              d.Now().UTC().Format(time.RFC3339),
+				Tool:            "Read",
+				Strategy:        string(plan.Strategy),
+				OrigTokensEst:   origEst,
+				DigestTokensEst: digEst,
+				SavedEst:        origEst - digEst,
+				CacheHit:        metrics.Miss(), // deterministic: not from cache
+			})
+			return hookio.Deny(d.Stdout, reason)
+		}
+
+		// Cost engine says intercept via worker: use content-hash key for cache lookup.
+		contentKey := cache.KeyFromContent([]byte(content), d.Cfg.Model)
+
 		var fm digest.FileMap
 		var use worker.Usage
 		hit := false
+		// Check cache before paying for a worker call.
 		fm, hit = d.CacheGet(contentKey)
 
 		if !hit {

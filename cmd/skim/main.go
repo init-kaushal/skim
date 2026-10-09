@@ -46,6 +46,7 @@ commands:
   doctor        environment and config diagnostics
   stats         cumulative interception savings
   explain       show why recent operations were (or weren't) optimized
+  map <file>    show the deterministic AST-based file map for a Go file
   pricing       show model pricing and calibration data
   config        show or change configuration
   install-shell add skim to PATH in your shell rc file (--dry-run to preview)
@@ -138,6 +139,17 @@ func runWithStdin(stdin io.Reader, args []string, stdout, stderr io.Writer) int 
 	case "pricing":
 		cfg := loadConfigOrDefault(nil)
 		if err := cli.Pricing(stdout, cost.LoadCalibration(), cfg); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		return 0
+
+	case "map":
+		if len(args) < 2 {
+			fmt.Fprintln(stderr, "usage: skim map <file>")
+			return 2
+		}
+		if err := cli.Map(stdout, args[1]); err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
