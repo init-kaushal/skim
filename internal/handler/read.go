@@ -187,20 +187,22 @@ func ReadHook(ctx context.Context, in hookio.Input, d Deps) error {
 		// Check cache before paying for a worker call.
 		fm, hit = d.CacheGet(contentKey)
 
+		actualStrategy := plan.Strategy
 		if !hit {
-			raw, u, werr := d.Summarize(ctx, worker.Request{
+			raw, u, actualStrat, werr := d.summarizeWithRouter(ctx, worker.Request{
 				Model:   d.Cfg.Model,
 				Kind:    worker.KindFileMap,
 				Content: content,
 				Meta:    ri.FilePath,
 				Timeout: time.Duration(d.Cfg.WorkerTimeoutSec) * time.Second,
 				Partial: cov.Partial(),
-			})
+			}, plan.Strategy)
 			if werr != nil {
 				d.Logf("read-hook: worker %s: %v", ri.FilePath, werr)
 				return hookio.Allow(d.Stdout)
 			}
 			use = u
+			actualStrategy = actualStrat
 			parsed, perr := digest.ParseFileMap(raw)
 			if perr != nil {
 				d.Logf("read-hook: parse digest %s: %v", ri.FilePath, perr)
@@ -221,7 +223,7 @@ func ReadHook(ctx context.Context, in hookio.Input, d Deps) error {
 		entry := metrics.Entry{
 			TS:                        d.Now().UTC().Format(time.RFC3339),
 			Tool:                      "Read",
-			Strategy:                  string(plan.Strategy),
+			Strategy:                  string(actualStrategy),
 			OrigTokensEst:             origEst,
 			DigestTokensEst:           digEst,
 			SavedEst:                  origEst - digEst,

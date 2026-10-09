@@ -16,6 +16,14 @@ type ModelPricing struct {
 	CacheReadPer1M  float64
 }
 
+// DefaultSonnetModel and DefaultOpusModel are the escalation targets when
+// the router ascends the chain. They are kept here (rather than in config) so
+// any package that needs a model name to escalate to has a single source.
+const (
+	DefaultSonnetModel = "claude-sonnet-5-5"
+	DefaultOpusModel   = "claude-opus-5-5"
+)
+
 // KnownPricing holds pricing for models skim interacts with. The session model
 // (the expensive one Claude Code runs) determines how much keeping content in
 // context actually costs. The worker model determines the optimization cost.
@@ -40,6 +48,8 @@ const (
 	StrategyPassthrough   Strategy = "PASSTHROUGH"    // allowed without analysis
 	StrategyDeterministic Strategy = "DETERMINISTIC"  // compacted without LLM
 	StrategyCheapWorker   Strategy = "CHEAP_WORKER"   // Haiku worker
+	StrategyNormalWorker  Strategy = "NORMAL_WORKER"  // Sonnet escalation
+	StrategyDeepWorker    Strategy = "DEEP_WORKER"    // Opus escalation
 	StrategyDirect        Strategy = "DIRECT"         // savings don't justify cost
 )
 

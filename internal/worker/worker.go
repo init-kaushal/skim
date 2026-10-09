@@ -38,6 +38,11 @@ type Request struct {
 	// source, not all of it. The prompt then bounds the model to the excerpt
 	// instead of asking it to map a whole file it cannot see.
 	Partial bool
+
+	// AllowEscalation tells the worker it may emit {"escalate": true} when the
+	// content is beyond its confidence threshold. Only meaningful for
+	// KindFileMap; set by the router on non-terminal tiers.
+	AllowEscalation bool
 }
 
 // Usage is what one worker call billed. The four token counts are kept apart

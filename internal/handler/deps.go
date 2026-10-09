@@ -12,6 +12,7 @@ import (
 	"github.com/kaushal/skim/internal/hookio"
 	"github.com/kaushal/skim/internal/metrics"
 	"github.com/kaushal/skim/internal/observe"
+	"github.com/kaushal/skim/internal/router"
 	"github.com/kaushal/skim/internal/worker"
 )
 
@@ -51,6 +52,12 @@ type Deps struct {
 	// threshold-only decisions (backward-compatible behaviour).
 	Engine *decision.Engine
 
+	// Router is the escalation chain. When non-nil and the plan calls for a
+	// worker, the router tries each tier in order and escalates when the initial
+	// tier signals uncertainty. When nil, Summarize is called directly (no
+	// escalation).
+	Router *router.Router
+
 	// Calibration holds compression performance history used for the telemetry
 	// feedback loop: after every worker call we record the actual compression
 	// ratio so future predictions improve. When nil, no feedback is recorded.
@@ -59,6 +66,22 @@ type Deps struct {
 	// ObserveRecord logs a routing decision. Usually observe.Record.
 	// When nil, decisions are not logged (no explain output, but still works).
 	ObserveRecord func(observe.Entry)
+}
+
+// summarizeWithRouter calls the router when it is wired; otherwise falls back
+// to d.Summarize. It returns the raw digest bytes, usage, and which strategy
+// was ultimately used (may be higher than the plan's initial strategy when
+// escalation fired).
+func (d Deps) summarizeWithRouter(ctx context.Context, req worker.Request, planned cost.Strategy) ([]byte, worker.Usage, cost.Strategy, error) {
+	if d.Router != nil {
+		res, err := d.Router.Summarize(ctx, req, d.Summarize)
+		if err != nil {
+			return nil, worker.Usage{}, planned, err
+		}
+		return res.Raw, res.Usage, res.Tier.Strategy, nil
+	}
+	raw, u, err := d.Summarize(ctx, req)
+	return raw, u, planned, err
 }
 
 // applyUsage copies a worker call's billing into a metrics entry and optionally

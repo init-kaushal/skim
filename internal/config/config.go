@@ -54,6 +54,13 @@ type Config struct {
 	// Overrides are merged into KnownPricing at startup; unset models keep defaults.
 	// Example: {"claude-opus-5-5": {"input_per_1m": 12.00, "output_per_1m": 60.00, ...}}
 	ModelPricingOverrides map[string]cost.ModelPricing `json:"model_pricing_overrides,omitempty"`
+
+	// EscalationEnabled turns on the Phase 3 escalation chain. When true,
+	// the router escalates from the configured worker model to the next tier
+	// (Haiku→Sonnet or Sonnet→Opus) when the initial worker signals uncertainty.
+	// Disabled by default: it adds per-escalation cost and most content does not
+	// need it. Enable with `skim config set escalation_enabled true`.
+	EscalationEnabled bool `json:"escalation_enabled,omitempty"`
 }
 
 func Default() Config {
