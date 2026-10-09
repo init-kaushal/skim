@@ -91,6 +91,13 @@ func Record(e Entry) error {
 	return err
 }
 
+// StrategyStats accumulates the cost/savings figures for one routing strategy.
+type StrategyStats struct {
+	Count         int
+	SavedEst      int
+	WorkerCostUSD float64
+}
+
 type Stats struct {
 	Interceptions map[string]int
 	// CacheHits/CacheMisses count only entries from a path that consults the
@@ -112,13 +119,20 @@ type Stats struct {
 	// keep rather than only a grand total.
 	SavedEstByTool map[string]int
 	CostUSDByTool  map[string]float64
+	// StrategyBreakdown gives per-routing-strategy totals so `skim stats` can
+	// show how much of the saving came from each tier (deterministic, cheap
+	// worker, normal worker, etc.). Entries written before Phase 1 have no
+	// Strategy field and accumulate under the empty-string key; the display
+	// layer should skip or label those as "legacy".
+	StrategyBreakdown map[string]StrategyStats
 }
 
 func Aggregate(r io.Reader) (Stats, error) {
 	s := Stats{
-		Interceptions:  map[string]int{},
-		SavedEstByTool: map[string]int{},
-		CostUSDByTool:  map[string]float64{},
+		Interceptions:     map[string]int{},
+		SavedEstByTool:    map[string]int{},
+		CostUSDByTool:     map[string]float64{},
+		StrategyBreakdown: map[string]StrategyStats{},
 	}
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -135,6 +149,16 @@ func Aggregate(r io.Reader) (Stats, error) {
 			s.Interceptions[e.Tool]++
 			s.SavedEstByTool[e.Tool] += e.SavedEst
 			s.CostUSDByTool[e.Tool] += e.WorkerCostUSD
+		}
+		// Only entries with a strategy field are tracked in the breakdown.
+		// Pre-Phase-1 entries have none and are excluded so the totals
+		// don't create a misleading unlabelled bucket.
+		if e.Strategy != "" {
+			st := s.StrategyBreakdown[e.Strategy]
+			st.Count++
+			st.SavedEst += e.SavedEst
+			st.WorkerCostUSD += e.WorkerCostUSD
+			s.StrategyBreakdown[e.Strategy] = st
 		}
 		// nil means "this path has no cache", which is not a miss.
 		if e.CacheHit != nil {

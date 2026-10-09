@@ -30,6 +30,37 @@ var sessionPrices = map[string]float64{
 
 const defaultSessionModel = "opus-5"
 
+// strategyOrder controls how the per-strategy table is printed — cheapest
+// (most desirable) tier first, most expensive last.
+var strategyOrder = []string{
+	"DETERMINISTIC",   // go/ast, TS regex, Python regex — zero worker cost
+	"CHEAP_WORKER",    // Haiku worker call
+	"NORMAL_WORKER",   // Sonnet (escalated from Haiku, or configured)
+	"DEEP_WORKER",     // Opus (escalated from Sonnet, or configured)
+	"DIRECT",          // passed through — engine decided not worth intercepting
+	"PASSTHROUGH",     // explicitly excluded (glob, binary, etc.)
+}
+
+// strategyNote is a one-phrase human label shown next to each tier.
+var strategyNote = map[string]string{
+	"DETERMINISTIC": "no worker — AST/regex",
+	"CHEAP_WORKER":  "Haiku worker",
+	"NORMAL_WORKER": "Sonnet worker",
+	"DEEP_WORKER":   "Opus worker",
+	"DIRECT":        "engine: not worth intercepting",
+	"PASSTHROUGH":   "excluded by config",
+}
+
+// knownStrategy is the set of strategies in strategyOrder, used to print
+// unknown future strategies at the end of the table without duplicating them.
+var knownStrategy = func() map[string]bool {
+	m := make(map[string]bool, len(strategyOrder))
+	for _, s := range strategyOrder {
+		m[s] = true
+	}
+	return m
+}()
+
 // cacheReadMultiplier is what a re-sent, cached prefix bills relative to fresh
 // input. It is what makes the compounding real: content skim keeps out of the
 // context would otherwise ride along on every later turn at this rate.
@@ -108,6 +139,30 @@ func Stats(w io.Writer, args []string) error {
 		fmt.Fprintln(w, "  cache   no cache-eligible interceptions yet")
 	}
 	fmt.Fprintln(w)
+
+	// Per-strategy breakdown: shows how the saving was earned.
+	// Strategies are sorted by routing tier order (cheapest first).
+	if len(s.StrategyBreakdown) > 0 {
+		fmt.Fprintf(w, "  %-20s %10s %14s %12s   note\n",
+			"strategy", "reads", "tokens saved", "worker $")
+		for _, strat := range strategyOrder {
+			st, ok := s.StrategyBreakdown[strat]
+			if !ok {
+				continue
+			}
+			note := strategyNote[strat]
+			fmt.Fprintf(w, "  %-20s %10d %14d %12.4f   %s\n",
+				strat, st.Count, st.SavedEst, st.WorkerCostUSD, note)
+		}
+		// Any strategy not in the known order (future additions) at the bottom.
+		for strat, st := range s.StrategyBreakdown {
+			if !knownStrategy[strat] {
+				fmt.Fprintf(w, "  %-20s %10d %14d %12.4f\n",
+					strat, st.Count, st.SavedEst, st.WorkerCostUSD)
+			}
+		}
+		fmt.Fprintln(w)
+	}
 
 	// --- the actual question, in dollars ---
 	savedFirst := float64(s.TotalSavedEst) * price / 1e6

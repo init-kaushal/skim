@@ -51,6 +51,13 @@ func Generate(src, filePath string) (digest.FileMap, bool) {
 			return digest.FileMap{}, false
 		}
 		return fm, true
+
+	case ".rs":
+		fm, err := parseRustFile(src, filePath)
+		if err != nil {
+			return digest.FileMap{}, false
+		}
+		return fm, true
 	}
 	return digest.FileMap{}, false
 }

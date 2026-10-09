@@ -131,6 +131,53 @@ func TestAggregate_CostIsSeparateFromTokens(t *testing.T) {
 	}
 }
 
+// TestAggregate_StrategyBreakdown is the regression guard for the per-strategy
+// accumulator: each routing tier's count, saved tokens, and worker cost must be
+// tallied independently so `skim stats` can answer which tier earned what.
+func TestAggregate_StrategyBreakdown(t *testing.T) {
+	lines := `{"tool":"Read","strategy":"DETERMINISTIC","saved_est":1000}
+{"tool":"Read","strategy":"DETERMINISTIC","saved_est":1500}
+{"tool":"Read","strategy":"CHEAP_WORKER","saved_est":4000,"worker_cost_usd":0.002}
+{"tool":"Read","strategy":"CHEAP_WORKER","saved_est":3000,"worker_cost_usd":0.0015}
+{"tool":"Read","strategy":"NORMAL_WORKER","saved_est":9000,"worker_cost_usd":0.010}
+{"tool":"Read","saved_est":500}
+`
+	s, err := Aggregate(strings.NewReader(lines))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	det := s.StrategyBreakdown["DETERMINISTIC"]
+	if det.Count != 2 {
+		t.Errorf("DETERMINISTIC count: want 2, got %d", det.Count)
+	}
+	if det.SavedEst != 2500 {
+		t.Errorf("DETERMINISTIC SavedEst: want 2500, got %d", det.SavedEst)
+	}
+	if det.WorkerCostUSD != 0 {
+		t.Errorf("DETERMINISTIC should have zero worker cost, got %.4f", det.WorkerCostUSD)
+	}
+
+	cw := s.StrategyBreakdown["CHEAP_WORKER"]
+	if cw.Count != 2 {
+		t.Errorf("CHEAP_WORKER count: want 2, got %d", cw.Count)
+	}
+	wantCost := 0.002 + 0.0015
+	if cw.WorkerCostUSD != wantCost {
+		t.Errorf("CHEAP_WORKER WorkerCostUSD: want %.4f, got %.4f", wantCost, cw.WorkerCostUSD)
+	}
+
+	nw := s.StrategyBreakdown["NORMAL_WORKER"]
+	if nw.Count != 1 {
+		t.Errorf("NORMAL_WORKER count: want 1, got %d", nw.Count)
+	}
+
+	// Legacy entry (no strategy) must NOT appear in StrategyBreakdown.
+	if _, ok := s.StrategyBreakdown[""]; ok {
+		t.Error("empty-strategy entries must not appear in StrategyBreakdown")
+	}
+}
+
 // TestEntry_CacheHitOmittedWhenNil keeps the wire format clean: a cacheless
 // path writes no cache_hit key at all, so it reads back as nil rather than as
 // the false that caused the original miscount.
