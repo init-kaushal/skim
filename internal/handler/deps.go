@@ -69,19 +69,28 @@ type Deps struct {
 }
 
 // summarizeWithRouter calls the router when it is wired; otherwise falls back
-// to d.Summarize. It returns the raw digest bytes, usage, and which strategy
-// was ultimately used (may be higher than the plan's initial strategy when
-// escalation fired).
-func (d Deps) summarizeWithRouter(ctx context.Context, req worker.Request, planned cost.Strategy) ([]byte, worker.Usage, cost.Strategy, error) {
+// to d.Summarize. It returns the router.Result so callers can use Result.Usage
+// (aggregate cost across all tiers) for billing and Result.SuccessUsage
+// (successful tier only) for calibration.
+func (d Deps) summarizeWithRouter(ctx context.Context, req worker.Request, planned cost.Strategy) (router.Result, cost.Strategy, error) {
 	if d.Router != nil {
 		res, err := d.Router.Summarize(ctx, req, d.Summarize)
 		if err != nil {
-			return nil, worker.Usage{}, planned, err
+			return router.Result{}, planned, err
 		}
-		return res.Raw, res.Usage, res.Tier.Strategy, nil
+		return res, res.Tier.Strategy, nil
 	}
 	raw, u, err := d.Summarize(ctx, req)
-	return raw, u, planned, err
+	if err != nil {
+		return router.Result{}, planned, err
+	}
+	// No router: wrap in a Result so callers have a uniform type.
+	return router.Result{
+		Raw:          raw,
+		Usage:        u,
+		SuccessUsage: u,
+		Tier:         router.Tier{Model: req.Model, Strategy: planned},
+	}, planned, nil
 }
 
 // applyUsage copies a worker call's billing into a metrics entry and optionally

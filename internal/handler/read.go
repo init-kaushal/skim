@@ -189,7 +189,7 @@ func ReadHook(ctx context.Context, in hookio.Input, d Deps) error {
 
 		actualStrategy := plan.Strategy
 		if !hit {
-			raw, u, actualStrat, werr := d.summarizeWithRouter(ctx, worker.Request{
+			res, actualStrat, werr := d.summarizeWithRouter(ctx, worker.Request{
 				Model:   d.Cfg.Model,
 				Kind:    worker.KindFileMap,
 				Content: content,
@@ -201,9 +201,9 @@ func ReadHook(ctx context.Context, in hookio.Input, d Deps) error {
 				d.Logf("read-hook: worker %s: %v", ri.FilePath, werr)
 				return hookio.Allow(d.Stdout)
 			}
-			use = u
+			use = res.Usage // aggregate cost across all attempted tiers
 			actualStrategy = actualStrat
-			parsed, perr := digest.ParseFileMap(raw)
+			parsed, perr := digest.ParseFileMap(res.Raw)
 			if perr != nil {
 				d.Logf("read-hook: parse digest %s: %v", ri.FilePath, perr)
 				return hookio.Allow(d.Stdout)
@@ -211,10 +211,10 @@ func ReadHook(ctx context.Context, in hookio.Input, d Deps) error {
 			fm = parsed
 			_ = d.CachePut(contentKey, fm)
 
-			// Telemetry feedback: record actual compression ratio so future
-			// predictions improve. Content tokens (no system overhead) vs output.
+			// Calibration uses the successful tier's output only. Using the
+			// aggregate would inflate the ratio estimate on escalated calls.
 			contentTokens := metrics.EstimateTokens(len(content))
-			recordCalibration(d.Calibration, "", contentTokens, use.OutputTokens)
+			recordCalibration(d.Calibration, "", contentTokens, res.SuccessUsage.OutputTokens)
 		}
 
 		reason := digest.RenderFileMap(fm, ri.FilePath, quoteSelfIfNeeded(execPath()), cov)

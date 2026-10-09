@@ -37,13 +37,21 @@ type Router struct {
 	Tiers []Tier
 }
 
-// Result is the outcome of a Summarize call: the raw digest bytes, usage from
-// the tier that succeeded, and which tier actually served the request.
+// Result is the outcome of a Summarize call.
 type Result struct {
 	Raw      []byte
-	Usage    worker.Usage
-	Tier     Tier
-	Escalated bool // true if any tier was skipped before success
+	// Usage is the aggregate across every attempted tier — including tiers that
+	// escalated. CostUSD is the sum of all calls; InputTokens and cache variants
+	// are likewise cumulative. OutputTokens holds only the successful tier's
+	// output (the escalated calls produced no useful output). Use Usage for
+	// billing/savings reporting so the full cost of the operation is visible.
+	Usage worker.Usage
+	// SuccessUsage is the successful tier's usage in isolation. Use it for
+	// calibration (compression ratio = SuccessUsage.OutputTokens / content
+	// tokens) so escalated-call noise does not corrupt the ratio estimates.
+	SuccessUsage worker.Usage
+	Tier         Tier
+	Escalated    bool // true if any tier was skipped before success
 }
 
 // RunFunc is the signature of the worker function the router calls. It matches
@@ -88,7 +96,12 @@ func chainFor(model string) []Tier {
 // the first successful result. A tier is skipped — and the next tried — only
 // when it emits an explicit escalation signal. Worker errors always degrade
 // open (returned as-is) without escalating.
+//
+// Every attempted tier's cost is accumulated into Result.Usage so the caller
+// sees the true cost of the operation, not just the successful tier's bill.
 func (r *Router) Summarize(ctx context.Context, req worker.Request, fn RunFunc) (Result, error) {
+	var agg worker.Usage
+
 	for i, tier := range r.Tiers {
 		req.Model = tier.Model
 		// Only non-terminal tiers may signal escalation; the last tier must
@@ -102,16 +115,28 @@ func (r *Router) Summarize(ctx context.Context, req worker.Request, fn RunFunc) 
 			return Result{}, err
 		}
 
+		// Accumulate this tier's cost unconditionally. An escalated call was
+		// still billed even though it produced no useful output.
+		agg.CostUSD += u.CostUSD
+		agg.InputTokens += u.InputTokens
+		agg.CacheWriteTokens += u.CacheWriteTokens
+		agg.CacheReadTokens += u.CacheReadTokens
+
 		if worker.IsEscalation(raw) {
 			// Explicit escalation signal: try the next tier.
 			continue
 		}
 
+		// Success: add this tier's output tokens to the aggregate. Output is
+		// meaningful only from the tier that produced a result.
+		agg.OutputTokens = u.OutputTokens
+
 		return Result{
-			Raw:       raw,
-			Usage:     u,
-			Tier:      tier,
-			Escalated: i > 0,
+			Raw:          raw,
+			Usage:        agg,
+			SuccessUsage: u,
+			Tier:         tier,
+			Escalated:    i > 0,
 		}, nil
 	}
 

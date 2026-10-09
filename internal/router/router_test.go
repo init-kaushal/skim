@@ -17,9 +17,9 @@ func makeRun(responses map[string][]byte, err error) router.RunFunc {
 			return nil, worker.Usage{}, err
 		}
 		if resp, ok := responses[req.Model]; ok {
-			return resp, worker.Usage{OutputTokens: len(resp)}, nil
+			return resp, worker.Usage{InputTokens: 1000, OutputTokens: len(resp), CostUSD: 0.001}, nil
 		}
-		return []byte(`{"summary":"ok","map":[{"lines":"1","kind":"body"}]}`), worker.Usage{OutputTokens: 50}, nil
+		return []byte(`{"summary":"ok","map":[{"lines":"1","kind":"body"}]}`), worker.Usage{InputTokens: 1000, OutputTokens: 50, CostUSD: 0.001}, nil
 	}
 }
 
@@ -64,6 +64,27 @@ func TestRouter_EscalationFired(t *testing.T) {
 	}
 	if string(res.Raw) != validFileMap {
 		t.Errorf("expected sonnet response, got: %s", res.Raw)
+	}
+
+	// Aggregate usage must include both calls. Each call costs $0.001 with
+	// 1000 input tokens, so two calls = $0.002 and 2000 input tokens.
+	if res.Usage.CostUSD != 0.002 {
+		t.Errorf("aggregate CostUSD: want 0.002, got %.4f", res.Usage.CostUSD)
+	}
+	if res.Usage.InputTokens != 2000 {
+		t.Errorf("aggregate InputTokens: want 2000, got %d", res.Usage.InputTokens)
+	}
+	// OutputTokens: only from the successful (Sonnet) tier.
+	if res.Usage.OutputTokens != len(validFileMap) {
+		t.Errorf("aggregate OutputTokens: want %d (success tier only), got %d", len(validFileMap), res.Usage.OutputTokens)
+	}
+
+	// SuccessUsage must be only Sonnet's — used for compression ratio calibration.
+	if res.SuccessUsage.InputTokens != 1000 {
+		t.Errorf("SuccessUsage.InputTokens: want 1000 (Sonnet only), got %d", res.SuccessUsage.InputTokens)
+	}
+	if res.SuccessUsage.CostUSD != 0.001 {
+		t.Errorf("SuccessUsage.CostUSD: want 0.001 (Sonnet only), got %.4f", res.SuccessUsage.CostUSD)
 	}
 }
 
