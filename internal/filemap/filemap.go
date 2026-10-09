@@ -18,6 +18,9 @@ import (
 // filePath is used only to determine the file type. Returns (fm, true) when
 // a deterministic map is available, (zero, false) when the file type is
 // unsupported or the source is too broken to produce a useful map.
+//
+// Supported: .go (via go/ast), .ts/.tsx/.js/.jsx/.mjs/.cjs (regex scan),
+// .py (regex scan). All other extensions fall through to the worker.
 func Generate(src, filePath string) (digest.FileMap, bool) {
 	ext := strings.ToLower(filepath.Ext(filePath))
 	switch ext {
@@ -30,6 +33,20 @@ func Generate(src, filePath string) (digest.FileMap, bool) {
 			return digest.FileMap{}, false
 		}
 		fm, err := parseGoFile(src, filePath)
+		if err != nil {
+			return digest.FileMap{}, false
+		}
+		return fm, true
+
+	case ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs":
+		fm, err := parseTSFile(src, filePath)
+		if err != nil {
+			return digest.FileMap{}, false
+		}
+		return fm, true
+
+	case ".py":
+		fm, err := parsePyFile(src, filePath)
 		if err != nil {
 			return digest.FileMap{}, false
 		}

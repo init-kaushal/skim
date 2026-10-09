@@ -50,9 +50,10 @@ func TestGenerate_GoFile_ReturnsFalseForTestFile(t *testing.T) {
 }
 
 func TestGenerate_GoFile_ReturnsFalseForUnsupportedExt(t *testing.T) {
-	_, ok := filemap.Generate(simpleGoFile, "auth.ts")
+	// .rb is not a supported extension — must fall through to the worker.
+	_, ok := filemap.Generate(simpleGoFile, "auth.rb")
 	if ok {
-		t.Error("should return false for non-.go extension")
+		t.Error("should return false for unsupported extension (.rb)")
 	}
 }
 
