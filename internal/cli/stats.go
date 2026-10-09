@@ -144,7 +144,7 @@ func Stats(w io.Writer, args []string) error {
 	// Strategies are sorted by routing tier order (cheapest first).
 	if len(s.StrategyBreakdown) > 0 {
 		fmt.Fprintf(w, "  %-20s %10s %14s %12s   note\n",
-			"strategy", "reads", "tokens saved", "worker $")
+			"strategy", "calls", "tokens saved", "worker $")
 		for _, strat := range strategyOrder {
 			st, ok := s.StrategyBreakdown[strat]
 			if !ok {

@@ -1,6 +1,7 @@
 package filemap_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -161,6 +162,72 @@ pub fn run(cfg: Config) {
 	}
 	if !hasRun {
 		t.Errorf("expected fn run entry: %v", fm.Map)
+	}
+}
+
+// TestGenerate_Rust_BracesInsideStringsAndComments guards against the known
+// weakness of the regex brace counter: braces that appear inside string
+// literals or line comments must not distort the depth count and make two
+// adjacent declarations merge into one entry or produce wrong line ranges.
+//
+// The scanner uses countBraces (shared with the TS parser) which skips
+// single/double/backtick-quoted strings and // line comments. This test
+// fixes the expected behaviour so a future regression is caught early.
+// (Raw string literals r#"..."# and block comments /* ... */ are out of
+// scope for the lightweight scanner; a full Rust parser can address those.)
+func TestGenerate_Rust_BracesInsideStringsAndComments(t *testing.T) {
+	src := `pub fn format_item(name: &str) -> String {
+    // braces in a comment: { should not affect depth }
+    format!("Hello, {}!", name) // another { in a comment }
+}
+
+pub fn count_braces(s: &str) -> usize {
+    let open  = "{";  // string literal containing {
+    let close = "}";  // string literal containing }
+    s.matches(open).count() + s.matches(close).count()
+}
+`
+	fm, ok := filemap.Generate(src, "util.rs")
+	if !ok {
+		t.Fatal("expected deterministic map")
+	}
+
+	// Both functions must produce separate map entries.
+	var formatEntry, countEntry string
+	for _, e := range fm.Map {
+		if strings.Contains(e.Kind, "format_item") {
+			formatEntry = e.Lines
+		}
+		if strings.Contains(e.Kind, "count_braces") {
+			countEntry = e.Lines
+		}
+	}
+	if formatEntry == "" {
+		t.Errorf("format_item entry missing: %v", fm.Map)
+	}
+	if countEntry == "" {
+		t.Errorf("count_braces entry missing: %v", fm.Map)
+	}
+
+	// The entries must be distinct and non-overlapping.
+	// format_item starts at line 1; count_braces starts at line 6.
+	// If braces inside strings/comments were counted, the depth would go
+	// negative or over-count and the scanner would close format_item too
+	// early or extend it past line 5.
+	if formatEntry == countEntry {
+		t.Errorf("format_item and count_braces merged into one entry: %s", formatEntry)
+	}
+
+	// format_item must close before count_braces starts (line 6).
+	var fStart, fEnd int
+	fmt.Sscanf(strings.ReplaceAll(formatEntry, "-", " "), "%d %d", &fStart, &fEnd)
+	if fEnd == 0 {
+		fEnd = fStart // single-line entry
+	}
+	var cStart int
+	fmt.Sscanf(countEntry, "%d", &cStart)
+	if fEnd >= cStart {
+		t.Errorf("format_item (lines %s) overlaps with count_braces (starts %d)", formatEntry, cStart)
 	}
 }
 
