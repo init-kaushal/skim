@@ -99,6 +99,42 @@ func ReadHook(ctx context.Context, in hookio.Input, d Deps) error {
 			return hookio.Allow(d.Stdout)
 		}
 
+		cov := digest.Coverage{
+			SeenBytes: seen, TotalBytes: sz.Bytes,
+			SeenLines: min(sz.Lines, maxWorkerInputLines), TotalLines: sz.Lines,
+		}
+
+		// Deterministic cache check: if this exact content was parsed before, the
+		// result is stored under a "deterministic" key. Checking it here, before
+		// calling PlanRead, means we skip the AST parse on subsequent reads of the
+		// same file — the write in the generation branch below populates the entry
+		// and this branch consumes it on every read after the first.
+		detKey := cache.KeyFromContent([]byte(content), "deterministic")
+		if fm, hit := d.CacheGet(detKey); hit {
+			reason := digest.RenderFileMap(fm, ri.FilePath, quoteSelfIfNeeded(execPath()), cov)
+			origEst := metrics.EstimateTokens(sz.PrefixBytes)
+			digEst := metrics.EstimateTokens(len(reason))
+			if d.ObserveRecord != nil {
+				d.ObserveRecord(observe.Entry{
+					Tool:     "Read",
+					Target:   ri.FilePath,
+					Strategy: cost.StrategyDeterministic,
+					DryRun:   d.Cfg.DryRun,
+					Reason:   "deterministic cache hit",
+				})
+			}
+			d.Record(metrics.Entry{
+				TS:              d.Now().UTC().Format(time.RFC3339),
+				Tool:            "Read",
+				Strategy:        string(cost.StrategyDeterministic),
+				OrigTokensEst:   origEst,
+				DigestTokensEst: digEst,
+				SavedEst:        origEst - digEst,
+				CacheHit:        metrics.Hit(),
+			})
+			return hookio.Deny(d.Stdout, reason)
+		}
+
 		plan := d.Engine.PlanRead(ri.FilePath, content, sz.Lines, len(content))
 
 		obs := observe.Entry{
@@ -121,16 +157,10 @@ func ReadHook(ctx context.Context, in hookio.Input, d Deps) error {
 			return hookio.Allow(d.Stdout)
 		}
 
-		cov := digest.Coverage{
-			SeenBytes: seen, TotalBytes: sz.Bytes,
-			SeenLines: min(sz.Lines, maxWorkerInputLines), TotalLines: sz.Lines,
-		}
-
-		// Deterministic tier: AST-generated file map — free, no worker, no cache
-		// lookup needed. We do cache the result so subsequent reads of the same
-		// content skip re-parsing.
+		// Deterministic tier: AST-generated file map. Write to the deterministic
+		// cache so the check above serves subsequent reads from cache, skipping
+		// the AST parse.
 		if plan.Strategy == cost.StrategyDeterministic && plan.DeterministicFileMap != nil {
-			detKey := cache.KeyFromContent([]byte(content), "deterministic")
 			_ = d.CachePut(detKey, *plan.DeterministicFileMap)
 
 			reason := digest.RenderFileMap(*plan.DeterministicFileMap, ri.FilePath, quoteSelfIfNeeded(execPath()), cov)
@@ -143,7 +173,7 @@ func ReadHook(ctx context.Context, in hookio.Input, d Deps) error {
 				OrigTokensEst:   origEst,
 				DigestTokensEst: digEst,
 				SavedEst:        origEst - digEst,
-				CacheHit:        metrics.Miss(), // deterministic: not from cache
+				CacheHit:        metrics.Miss(),
 			})
 			return hookio.Deny(d.Stdout, reason)
 		}
@@ -157,21 +187,23 @@ func ReadHook(ctx context.Context, in hookio.Input, d Deps) error {
 		// Check cache before paying for a worker call.
 		fm, hit = d.CacheGet(contentKey)
 
+		actualStrategy := plan.Strategy
 		if !hit {
-			raw, u, werr := d.Summarize(ctx, worker.Request{
+			res, actualStrat, werr := d.summarizeWithRouter(ctx, worker.Request{
 				Model:   d.Cfg.Model,
 				Kind:    worker.KindFileMap,
 				Content: content,
 				Meta:    ri.FilePath,
 				Timeout: time.Duration(d.Cfg.WorkerTimeoutSec) * time.Second,
 				Partial: cov.Partial(),
-			})
+			}, plan.Strategy)
 			if werr != nil {
 				d.Logf("read-hook: worker %s: %v", ri.FilePath, werr)
 				return hookio.Allow(d.Stdout)
 			}
-			use = u
-			parsed, perr := digest.ParseFileMap(raw)
+			use = res.Usage // aggregate cost across all attempted tiers
+			actualStrategy = actualStrat
+			parsed, perr := digest.ParseFileMap(res.Raw)
 			if perr != nil {
 				d.Logf("read-hook: parse digest %s: %v", ri.FilePath, perr)
 				return hookio.Allow(d.Stdout)
@@ -179,10 +211,10 @@ func ReadHook(ctx context.Context, in hookio.Input, d Deps) error {
 			fm = parsed
 			_ = d.CachePut(contentKey, fm)
 
-			// Telemetry feedback: record actual compression ratio so future
-			// predictions improve. Content tokens (no system overhead) vs output.
+			// Calibration uses the successful tier's output only. Using the
+			// aggregate would inflate the ratio estimate on escalated calls.
 			contentTokens := metrics.EstimateTokens(len(content))
-			recordCalibration(d.Calibration, "", contentTokens, use.OutputTokens)
+			recordCalibration(d.Calibration, "", contentTokens, res.SuccessUsage.OutputTokens)
 		}
 
 		reason := digest.RenderFileMap(fm, ri.FilePath, quoteSelfIfNeeded(execPath()), cov)
@@ -191,7 +223,7 @@ func ReadHook(ctx context.Context, in hookio.Input, d Deps) error {
 		entry := metrics.Entry{
 			TS:                        d.Now().UTC().Format(time.RFC3339),
 			Tool:                      "Read",
-			Strategy:                  string(plan.Strategy),
+			Strategy:                  string(actualStrategy),
 			OrigTokensEst:             origEst,
 			DigestTokensEst:           digEst,
 			SavedEst:                  origEst - digEst,

@@ -12,6 +12,7 @@ import (
 	"github.com/kaushal/skim/internal/hookio"
 	"github.com/kaushal/skim/internal/metrics"
 	"github.com/kaushal/skim/internal/observe"
+	"github.com/kaushal/skim/internal/router"
 	"github.com/kaushal/skim/internal/worker"
 )
 
@@ -51,6 +52,12 @@ type Deps struct {
 	// threshold-only decisions (backward-compatible behaviour).
 	Engine *decision.Engine
 
+	// Router is the escalation chain. When non-nil and the plan calls for a
+	// worker, the router tries each tier in order and escalates when the initial
+	// tier signals uncertainty. When nil, Summarize is called directly (no
+	// escalation).
+	Router *router.Router
+
 	// Calibration holds compression performance history used for the telemetry
 	// feedback loop: after every worker call we record the actual compression
 	// ratio so future predictions improve. When nil, no feedback is recorded.
@@ -59,6 +66,31 @@ type Deps struct {
 	// ObserveRecord logs a routing decision. Usually observe.Record.
 	// When nil, decisions are not logged (no explain output, but still works).
 	ObserveRecord func(observe.Entry)
+}
+
+// summarizeWithRouter calls the router when it is wired; otherwise falls back
+// to d.Summarize. It returns the router.Result so callers can use Result.Usage
+// (aggregate cost across all tiers) for billing and Result.SuccessUsage
+// (successful tier only) for calibration.
+func (d Deps) summarizeWithRouter(ctx context.Context, req worker.Request, planned cost.Strategy) (router.Result, cost.Strategy, error) {
+	if d.Router != nil {
+		res, err := d.Router.Summarize(ctx, req, d.Summarize)
+		if err != nil {
+			return router.Result{}, planned, err
+		}
+		return res, res.Tier.Strategy, nil
+	}
+	raw, u, err := d.Summarize(ctx, req)
+	if err != nil {
+		return router.Result{}, planned, err
+	}
+	// No router: wrap in a Result so callers have a uniform type.
+	return router.Result{
+		Raw:          raw,
+		Usage:        u,
+		SuccessUsage: u,
+		Tier:         router.Tier{Model: req.Model, Strategy: planned},
+	}, planned, nil
 }
 
 // applyUsage copies a worker call's billing into a metrics entry and optionally

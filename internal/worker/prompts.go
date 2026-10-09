@@ -20,16 +20,20 @@ func promptFor(req Request) string {
 				"Do NOT describe or guess at anything beyond where the excerpt ends, " +
 				"and do not emit line numbers past its final line."
 		}
+		escalate := ""
+		if req.AllowEscalation {
+			escalate = escalationInstruction
+		}
 		return fmt.Sprintf(`You are a code-reading assistant. Below is %s %s.
 Return ONLY a JSON object, no prose, with this shape:
 {"summary": "<3-5 sentences on purpose and shape>",
  "map": [{"lines": "<start>-<end>", "kind": "<what lives there>"}, ...],
  "symbols": ["<top-level names, at most 40 of the most significant>"],
  "notes": "line numbers approximate +/- 3"}
-%s
+%s%s
 
 FILE CONTENTS:
-%s`, scope, req.Meta, rule, req.Content)
+%s`, scope, req.Meta, rule, escalate, req.Content)
 
 	case KindClusters:
 		return fmt.Sprintf(`You are a search-result summariser. Below are ripgrep matches for pattern %q.

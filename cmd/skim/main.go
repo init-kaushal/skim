@@ -21,6 +21,7 @@ import (
 	"github.com/kaushal/skim/internal/observe"
 	"github.com/kaushal/skim/internal/paths"
 	"github.com/kaushal/skim/internal/rg"
+	"github.com/kaushal/skim/internal/router"
 	"github.com/kaushal/skim/internal/runner"
 	"github.com/kaushal/skim/internal/worker"
 )
@@ -272,6 +273,7 @@ func hookMain(stdin io.Reader, stdout io.Writer, fn hookFn) int {
 		Engine:        eng,
 		Calibration:   cal,
 		ObserveRecord: observe.Record,
+		Router:        router.New(cfg),
 	}
 	_ = fn(context.Background(), in, d)
 	return 0
