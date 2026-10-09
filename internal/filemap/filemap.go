@@ -3,8 +3,15 @@
 //
 //	cache hit → DETERMINISTIC (this package) → cheap worker → direct pass
 //
-// Currently supports Go source files via go/ast. Other languages fall through
-// to the worker path.
+// Supported languages and formats:
+//   - .go       — via go/ast; full symbol table with line ranges
+//   - .ts/.tsx/.js/.jsx/.mjs/.cjs — regex scan; imports, exports, classes, functions
+//   - .py       — regex scan; classes with method lists, functions, imports
+//   - .rs       — regex scan; pub/private filtering, traits, enums, impl blocks
+//   - .json     — encoding/json; top-level keys with value shapes; lock files excluded
+//   - .yml/.yaml — indent scan; Docker Compose, Kubernetes, GitHub Actions recognized
+//
+// All other extensions fall through to the worker path.
 package filemap
 
 import (
@@ -20,8 +27,17 @@ import (
 // unsupported or the source is too broken to produce a useful map.
 //
 // Supported: .go (via go/ast), .ts/.tsx/.js/.jsx/.mjs/.cjs (regex scan),
-// .py (regex scan). All other extensions fall through to the worker.
+// .py (regex scan), .rs (regex scan), .json (encoding/json),
+// .yml/.yaml (indent scan). Lock files are excluded even when they use a
+// supported extension.
 func Generate(src, filePath string) (digest.FileMap, bool) {
+	// Lock files contain version-pinned dependency graphs that the model must
+	// read verbatim. A structural digest is actively misleading.
+	base := strings.ToLower(filepath.Base(filePath))
+	if lockFileNames[base] {
+		return digest.FileMap{}, false
+	}
+
 	ext := strings.ToLower(filepath.Ext(filePath))
 	switch ext {
 	case ".go":
@@ -54,6 +70,20 @@ func Generate(src, filePath string) (digest.FileMap, bool) {
 
 	case ".rs":
 		fm, err := parseRustFile(src, filePath)
+		if err != nil {
+			return digest.FileMap{}, false
+		}
+		return fm, true
+
+	case ".json":
+		fm, err := parseJSONFile(src, filePath)
+		if err != nil {
+			return digest.FileMap{}, false
+		}
+		return fm, true
+
+	case ".yml", ".yaml":
+		fm, err := parseYAMLFile(src, filePath)
 		if err != nil {
 			return digest.FileMap{}, false
 		}
