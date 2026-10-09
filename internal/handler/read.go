@@ -99,6 +99,42 @@ func ReadHook(ctx context.Context, in hookio.Input, d Deps) error {
 			return hookio.Allow(d.Stdout)
 		}
 
+		cov := digest.Coverage{
+			SeenBytes: seen, TotalBytes: sz.Bytes,
+			SeenLines: min(sz.Lines, maxWorkerInputLines), TotalLines: sz.Lines,
+		}
+
+		// Deterministic cache check: if this exact content was parsed before, the
+		// result is stored under a "deterministic" key. Checking it here, before
+		// calling PlanRead, means we skip the AST parse on subsequent reads of the
+		// same file — the write in the generation branch below populates the entry
+		// and this branch consumes it on every read after the first.
+		detKey := cache.KeyFromContent([]byte(content), "deterministic")
+		if fm, hit := d.CacheGet(detKey); hit {
+			reason := digest.RenderFileMap(fm, ri.FilePath, quoteSelfIfNeeded(execPath()), cov)
+			origEst := metrics.EstimateTokens(sz.PrefixBytes)
+			digEst := metrics.EstimateTokens(len(reason))
+			if d.ObserveRecord != nil {
+				d.ObserveRecord(observe.Entry{
+					Tool:     "Read",
+					Target:   ri.FilePath,
+					Strategy: cost.StrategyDeterministic,
+					DryRun:   d.Cfg.DryRun,
+					Reason:   "deterministic cache hit",
+				})
+			}
+			d.Record(metrics.Entry{
+				TS:              d.Now().UTC().Format(time.RFC3339),
+				Tool:            "Read",
+				Strategy:        string(cost.StrategyDeterministic),
+				OrigTokensEst:   origEst,
+				DigestTokensEst: digEst,
+				SavedEst:        origEst - digEst,
+				CacheHit:        metrics.Hit(),
+			})
+			return hookio.Deny(d.Stdout, reason)
+		}
+
 		plan := d.Engine.PlanRead(ri.FilePath, content, sz.Lines, len(content))
 
 		obs := observe.Entry{
@@ -121,16 +157,10 @@ func ReadHook(ctx context.Context, in hookio.Input, d Deps) error {
 			return hookio.Allow(d.Stdout)
 		}
 
-		cov := digest.Coverage{
-			SeenBytes: seen, TotalBytes: sz.Bytes,
-			SeenLines: min(sz.Lines, maxWorkerInputLines), TotalLines: sz.Lines,
-		}
-
-		// Deterministic tier: AST-generated file map — free, no worker, no cache
-		// lookup needed. We do cache the result so subsequent reads of the same
-		// content skip re-parsing.
+		// Deterministic tier: AST-generated file map. Write to the deterministic
+		// cache so the check above serves subsequent reads from cache, skipping
+		// the AST parse.
 		if plan.Strategy == cost.StrategyDeterministic && plan.DeterministicFileMap != nil {
-			detKey := cache.KeyFromContent([]byte(content), "deterministic")
 			_ = d.CachePut(detKey, *plan.DeterministicFileMap)
 
 			reason := digest.RenderFileMap(*plan.DeterministicFileMap, ri.FilePath, quoteSelfIfNeeded(execPath()), cov)
@@ -143,7 +173,7 @@ func ReadHook(ctx context.Context, in hookio.Input, d Deps) error {
 				OrigTokensEst:   origEst,
 				DigestTokensEst: digEst,
 				SavedEst:        origEst - digEst,
-				CacheHit:        metrics.Miss(), // deterministic: not from cache
+				CacheHit:        metrics.Miss(),
 			})
 			return hookio.Deny(d.Stdout, reason)
 		}
