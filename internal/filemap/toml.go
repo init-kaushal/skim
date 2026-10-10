@@ -93,26 +93,11 @@ func parseTOMLFile(src, filePath string) (digest.FileMap, error) {
 	}
 	closeSection(len(lines))
 
-	// Filter out the root section if it has no keys and there are other sections.
-	// Also filter out array sections where the header appears more than once
-	// (e.g. multiple [[bin]] — show as a single merged entry).
+	// Filter out the empty root section when there are named sections to show.
 	var filtered []*tomlSection
-	arraySeen := map[string]bool{}
 	for _, s := range sections {
 		if s.header == "__root__" && len(s.keys) == 0 && len(sections) > 1 {
 			continue
-		}
-		if s.isArray {
-			if arraySeen[s.header] {
-				// Extend the previous array entry's end line instead of adding a duplicate.
-				for _, prev := range filtered {
-					if prev.header == s.header && prev.isArray {
-						prev.endLine = s.endLine
-					}
-				}
-				continue
-			}
-			arraySeen[s.header] = true
 		}
 		filtered = append(filtered, s)
 	}
@@ -123,6 +108,11 @@ func parseTOMLFile(src, filePath string) (digest.FileMap, error) {
 
 	var entries []digest.MapEntry
 	var symbols []string
+	// symbolSeen deduplicates the symbols list for repeated [[array-of-tables]]
+	// headers (e.g. multiple [[bin]] blocks). Each block keeps its own line
+	// range in the map — merging ranges would cause unrelated sections in
+	// between to appear as part of [[bin]].
+	symbolSeen := map[string]bool{}
 
 	for _, s := range filtered {
 		if s.header == "__root__" {
@@ -140,8 +130,9 @@ func parseTOMLFile(src, filePath string) (digest.FileMap, error) {
 			}
 		} else {
 			name := tomlSectionDisplayName(s)
-			if len(symbols) < 40 {
+			if len(symbols) < 40 && !symbolSeen[name] {
 				symbols = append(symbols, name)
+				symbolSeen[name] = true
 			}
 			entries = append(entries, digest.MapEntry{
 				Lines: lineRange(s.startLine, s.endLine),

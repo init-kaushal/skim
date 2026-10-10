@@ -1,6 +1,7 @@
 package filemap_test
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -70,8 +71,9 @@ lto = true
 	t.Errorf("no [package] entry found: %v", fm.Map)
 }
 
-func TestGenerate_TOML_ArrayOfTablesMerged(t *testing.T) {
-	// Multiple [[bin]] entries must appear as one merged symbol/entry, not N duplicates.
+func TestGenerate_TOML_ArrayOfTablesOneSymbol(t *testing.T) {
+	// Multiple [[bin]] entries must produce one symbol but separate map entries —
+	// one per block, each with its own line range.
 	src := `[package]
 name = "multi-bin"
 version = "0.1.0"
@@ -93,14 +95,97 @@ path = "src/c.rs"
 		t.Fatal("expected deterministic map")
 	}
 
-	binCount := 0
+	// Exactly one [[bin]] symbol.
+	binSymbols := 0
 	for _, s := range fm.Symbols {
 		if strings.Contains(s, "bin") {
-			binCount++
+			binSymbols++
 		}
 	}
-	if binCount != 1 {
-		t.Errorf("multiple [[bin]] entries should be merged to one symbol, got %d: %v", binCount, fm.Symbols)
+	if binSymbols != 1 {
+		t.Errorf("[[bin]] should appear once in symbols, got %d: %v", binSymbols, fm.Symbols)
+	}
+
+	// Three separate map entries for [[bin]].
+	binEntries := 0
+	for _, e := range fm.Map {
+		if strings.Contains(e.Kind, "[[bin]]") {
+			binEntries++
+		}
+	}
+	if binEntries != 3 {
+		t.Errorf("expected 3 separate [[bin]] map entries, got %d: %v", binEntries, fm.Map)
+	}
+}
+
+func TestGenerate_TOML_ArrayTableLineRangesNoOverlap(t *testing.T) {
+	// When a named [section] sits between two [[array-table]] blocks, the
+	// array-table entries must NOT span the section between them.
+	//
+	// Bug scenario from code review:
+	//   line 1:  [[bin]]  name = "cli"
+	//   line 4:  [dependencies]
+	//   line 5:  serde = "1"
+	//   line 7:  [[bin]]  name = "worker"
+	//
+	// With the old "extend endLine" approach, [[bin]] entry 1 was stretched
+	// to cover lines 1–8, swallowing [dependencies] entirely.
+	src := `[[bin]]
+name = "cli"
+
+[dependencies]
+serde = "1"
+
+[[bin]]
+name = "worker"
+`
+	fm, ok := filemap.Generate(src, "Cargo.toml")
+	if !ok {
+		t.Fatal("expected deterministic map")
+	}
+
+	// Collect line ranges by entry kind.
+	ranges := map[string][]string{}
+	for _, e := range fm.Map {
+		ranges[e.Kind] = append(ranges[e.Kind], e.Lines)
+	}
+
+	// [dependencies] must have its own entry.
+	if len(ranges["[dependencies] — serde"]) == 0 {
+		// Fallback: look for any entry whose kind starts with "[dependencies]".
+		found := false
+		for _, e := range fm.Map {
+			if strings.HasPrefix(e.Kind, "[dependencies]") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("[dependencies] section has no map entry; it may have been swallowed by [[bin]]: %v", fm.Map)
+		}
+	}
+
+	// The first [[bin]] entry must end before [dependencies] starts (line 4).
+	for _, e := range fm.Map {
+		if !strings.Contains(e.Kind, "[[bin]]") {
+			continue
+		}
+		// Parse start and end from e.Lines ("N" or "N-M").
+		parts := strings.SplitN(e.Lines, "-", 2)
+		start, err := strconv.Atoi(parts[0])
+		if err != nil {
+			t.Errorf("cannot parse start line from %q: %v", e.Lines, err)
+			continue
+		}
+		end := start
+		if len(parts) == 2 {
+			if v, err := strconv.Atoi(parts[1]); err == nil {
+				end = v
+			}
+		}
+		if start == 1 && end >= 4 {
+			t.Errorf("first [[bin]] entry (lines %s) overlaps [dependencies] at line 4", e.Lines)
+		}
 	}
 }
 
