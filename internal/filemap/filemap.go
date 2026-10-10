@@ -21,6 +21,7 @@
 //   - .rb/.gemspec           — class/module definitions with method lists
 //   - .kt/.kts               — class/interface/object/fun definitions with function lists
 //   - .java                  — class/interface/enum/record/annotation-type with method lists
+//   - .swift                 — class/struct/enum/protocol/actor/extension with func lists
 //
 // All other extensions fall through to the worker path.
 package filemap
@@ -198,6 +199,13 @@ func Generate(src, filePath string) (digest.FileMap, bool) {
 
 	case ".java":
 		fm, ok := parseJavaFile(src, filePath)
+		if !ok {
+			return digest.FileMap{}, false
+		}
+		return fm, true
+
+	case ".swift":
+		fm, ok := parseSwiftFile(src, filePath)
 		if !ok {
 			return digest.FileMap{}, false
 		}
