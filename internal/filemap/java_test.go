@@ -417,6 +417,61 @@ func TestGenerate_Java_StaticInitBlock(t *testing.T) {
 	}
 }
 
+// TestGenerate_Java_BlockComment_InlineBrace is the regression test for the
+// bug where javaNetBraces did not handle /* ... */ block comments and would
+// count the "}" inside "/* } */" as a real closing brace, prematurely ending
+// the tracked block. The test also exercises a multiline block comment whose
+// opening is mid-line.
+func TestGenerate_Java_BlockComment_InlineBrace(t *testing.T) {
+	// Inline block comment: "/* } */" on the same line as code.
+	src := `class Example {
+    /* } */ void run() {}
+    class Nested {}
+}
+class Another {
+    public void check() {}
+}
+`
+	fm, ok := filemap.Generate(src, "Example.java")
+	if !ok {
+		t.Fatal("expected deterministic map")
+	}
+	if len(fm.Map) != 2 {
+		t.Fatalf("expected 2 entries (block-comment '}' corrupted depth?), got %d: %v", len(fm.Map), fm.Map)
+	}
+	if !strings.Contains(fm.Map[0].Kind, "Example") {
+		t.Errorf("first entry should be Example, got: %s", fm.Map[0].Kind)
+	}
+	if !strings.Contains(fm.Map[1].Kind, "Another") {
+		t.Errorf("second entry should be Another, got: %s", fm.Map[1].Kind)
+	}
+
+	// Multiline block comment opened mid-line.
+	src2 := `class Alpha {
+    int x = 1; /* start of
+       multiline comment with } brace
+    */
+    public void hello() {}
+}
+class Beta {
+    public void world() {}
+}
+`
+	fm2, ok2 := filemap.Generate(src2, "Multi.java")
+	if !ok2 {
+		t.Fatal("expected deterministic map for multiline block comment")
+	}
+	if len(fm2.Map) != 2 {
+		t.Fatalf("expected 2 entries (mid-line block comment broke depth?), got %d: %v", len(fm2.Map), fm2.Map)
+	}
+	if !strings.Contains(fm2.Map[0].Kind, "hello") {
+		t.Errorf("expected 'hello' in Alpha Kind, got: %s", fm2.Map[0].Kind)
+	}
+	if !strings.Contains(fm2.Map[1].Kind, "Beta") {
+		t.Errorf("second entry should be Beta, got: %s", fm2.Map[1].Kind)
+	}
+}
+
 func TestGenerate_Java_FallsThrough_Empty(t *testing.T) {
 	_, ok := filemap.Generate("", "App.java")
 	if ok {
