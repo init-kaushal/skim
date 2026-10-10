@@ -14,6 +14,7 @@
 //   - Dockerfile / *.dockerfile — FROM stages with instruction verb summary
 //   - Makefile / GNUmakefile / *.mk — explicit targets with first recipe line
 //   - .sh/.bash/.zsh/.fish and common rc/profile names — function extraction
+//   - .tf/.hcl — resource, data, variable, output, module, provider blocks; lock file excluded
 //
 // All other extensions fall through to the worker path.
 package filemap
@@ -139,6 +140,16 @@ func Generate(src, filePath string) (digest.FileMap, bool) {
 
 	case ".sh", ".bash", ".zsh", ".fish", ".ksh", ".dash":
 		fm, err := parseShellFile(src, filePath)
+		if err != nil {
+			return digest.FileMap{}, false
+		}
+		return fm, true
+
+	case ".tf", ".hcl":
+		if hclLockFileNames[base] {
+			return digest.FileMap{}, false
+		}
+		fm, err := parseHCLFile(src, filePath)
 		if err != nil {
 			return digest.FileMap{}, false
 		}

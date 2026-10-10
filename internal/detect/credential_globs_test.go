@@ -44,6 +44,8 @@ func TestDefaultPassthroughGlobs_Credentials(t *testing.T) {
 		{"tls/keystore.pfx", true, ".pfx"},
 
 		// Lock files — globs protected from maps
+		// .terraform.lock.hcl is excluded at the filemap parser level
+		// (hclLockFileNames), not via a config glob, so it is not tested here.
 		{"yarn.lock", true, "yarn.lock at root"},
 		{"frontend/yarn.lock", true, "yarn.lock nested"},
 		{"go.sum", true, "go.sum at root"},
