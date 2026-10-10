@@ -68,6 +68,7 @@ func parseKotlinFile(src, _ string) (digest.FileMap, bool) {
 
 	var blocks []*kotlinBlock
 	var cur *kotlinBlock
+	inCompanion := false // true while parsing a companion object body at depth 2
 	// pendingBlock holds a recognized class/object/interface whose opening {
 	// has not yet been seen (common with multi-line primary constructors:
 	//   class Foo(
@@ -154,12 +155,21 @@ func parseKotlinFile(src, _ string) (digest.FileMap, bool) {
 		}
 
 		if cur != nil {
-			// Record functions at depth 1 BEFORE updating depth, so a "fun foo() {"
-			// line (which takes depth from 1 → 2) is correctly identified as a
-			// member of the current block.
+			// Record functions and companion objects at depth 1 BEFORE updating
+			// depth, so a "fun foo() {" line (depth 1→2) is correctly identified
+			// as a member of the current block.
 			if depth == 1 {
-				if m := kotlinFun.FindStringSubmatch(trimmed); m != nil {
+				if kotlinCompanion.MatchString(trimmed) {
+					inCompanion = true
+					// Companion body will open at depth 2; functions inside it
+					// are collected below with a "companion." prefix.
+				} else if m := kotlinFun.FindStringSubmatch(trimmed); m != nil {
 					name := kotlinFunName(m[1], m[2])
+					cur.funs = append(cur.funs, name)
+				}
+			} else if depth == 2 && inCompanion {
+				if m := kotlinFun.FindStringSubmatch(trimmed); m != nil {
+					name := "companion." + kotlinFunName(m[1], m[2])
 					cur.funs = append(cur.funs, name)
 				}
 			}
@@ -167,6 +177,9 @@ func parseKotlinFile(src, _ string) (digest.FileMap, bool) {
 			if depth <= 0 {
 				closeBlock(lineNo)
 				depth = 0
+				inCompanion = false
+			} else if depth == 1 && inCompanion {
+				inCompanion = false // companion block closed
 			}
 			continue
 		}
@@ -254,8 +267,8 @@ func parseKotlinFile(src, _ string) (digest.FileMap, bool) {
 }
 
 // kotlinNetBraces counts net brace depth for a Kotlin line, ignoring braces
-// inside double-quoted strings and after // comments. Triple-quoted strings
-// are handled at the line level before this function is called.
+// inside double-quoted strings, character literals, and after // comments.
+// Triple-quoted strings are handled at the line level before this is called.
 func kotlinNetBraces(line string) int {
 	depth := 0
 	inStr := false
@@ -274,6 +287,17 @@ func kotlinNetBraces(line string) int {
 		switch ch {
 		case '"':
 			inStr = true
+		case '\'':
+			// Skip character literal: 'x', '\n', '\uXXXX', etc.
+			i++
+			for i < len(line) {
+				if line[i] == '\\' {
+					i++ // skip escape char
+				} else if line[i] == '\'' {
+					break
+				}
+				i++
+			}
 		case '/':
 			if i+1 < len(line) && line[i+1] == '/' {
 				return depth

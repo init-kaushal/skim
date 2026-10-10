@@ -259,6 +259,79 @@ data class SearchRequest(
 	}
 }
 
+// TestGenerate_Kotlin_CompanionObject verifies that companion objects inside
+// a class are recognized and their functions collected (prefixed "companion.").
+func TestGenerate_Kotlin_CompanionObject(t *testing.T) {
+	src := `class UserFactory {
+    private val count = 0
+
+    fun instanceMethod(): String = "instance"
+
+    companion object {
+        fun create(email: String): UserFactory = UserFactory()
+        fun fromEnv(): UserFactory = UserFactory()
+    }
+}
+
+class AnotherClass {
+    fun hello() = "world"
+}
+`
+	fm, ok := filemap.Generate(src, "factory.kt")
+	if !ok {
+		t.Fatal("expected deterministic map")
+	}
+	if len(fm.Map) != 2 {
+		t.Fatalf("expected 2 entries, got %d: %v", len(fm.Map), fm.Map)
+	}
+	kind := fm.Map[0].Kind
+	if !strings.Contains(kind, "instanceMethod") {
+		t.Errorf("expected 'instanceMethod' in Kind, got: %s", kind)
+	}
+	if !strings.Contains(kind, "companion.create") {
+		t.Errorf("expected 'companion.create' in Kind, got: %s", kind)
+	}
+	if !strings.Contains(kind, "companion.fromEnv") {
+		t.Errorf("expected 'companion.fromEnv' in Kind, got: %s", kind)
+	}
+	// Second class must be a separate entry.
+	if !strings.Contains(fm.Map[1].Kind, "AnotherClass") {
+		t.Errorf("expected AnotherClass as second entry, got: %s", fm.Map[1].Kind)
+	}
+}
+
+// TestGenerate_Kotlin_CharLiteral verifies that braces inside Kotlin character
+// literals do not corrupt block depth tracking.
+func TestGenerate_Kotlin_CharLiteral(t *testing.T) {
+	src := `class BraceParser {
+    val open  = '{'
+    val close = '}'
+    val tab   = '\t'
+
+    fun run(): String {
+        return "${open}content${close}"
+    }
+}
+
+class AfterCharLiteral {
+    fun check() = true
+}
+`
+	fm, ok := filemap.Generate(src, "braces.kt")
+	if !ok {
+		t.Fatal("expected deterministic map")
+	}
+	if len(fm.Map) != 2 {
+		t.Fatalf("expected 2 entries (char literal '}' corrupted depth?), got %d: %v", len(fm.Map), fm.Map)
+	}
+	if !strings.Contains(fm.Map[0].Kind, "run") {
+		t.Errorf("expected 'run' in BraceParser Kind, got: %s", fm.Map[0].Kind)
+	}
+	if !strings.Contains(fm.Map[1].Kind, "AfterCharLiteral") {
+		t.Errorf("expected AfterCharLiteral as second entry, got: %s", fm.Map[1].Kind)
+	}
+}
+
 func TestGenerate_Kotlin_FallsThrough_Empty(t *testing.T) {
 	_, ok := filemap.Generate("", "app.kt")
 	if ok {
