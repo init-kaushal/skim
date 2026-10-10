@@ -236,6 +236,82 @@ provider "registry.terraform.io/hashicorp/random" {
 	}
 }
 
+// TestGenerate_HCL_BraceInString is the regression test for the brace-in-string
+// bug. A closing brace inside a double-quoted string value must not end the
+// block's range prematurely.
+func TestGenerate_HCL_BraceInString(t *testing.T) {
+	src := `resource "example" "config" {
+  description = "a closing brace } in this string"
+  name        = "still inside the resource"
+}
+
+resource "example" "other" {
+  value = "ok"
+}
+`
+	fm, ok := filemap.Generate(src, "main.tf")
+	if !ok {
+		t.Fatal("expected deterministic map")
+	}
+	if len(fm.Map) != 2 {
+		t.Fatalf("expected 2 map entries (brace in string closed first block early), got %d: %v", len(fm.Map), fm.Map)
+	}
+
+	// The first resource block must span lines 1–4 (the closing } is on line 4).
+	if !strings.HasPrefix(fm.Map[0].Lines, "1") {
+		t.Errorf("first resource should start on line 1, got: %s", fm.Map[0].Lines)
+	}
+	// The block's end line must be at least line 4 (brace-in-string is on line 2).
+	parts := strings.SplitN(fm.Map[0].Lines, "-", 2)
+	if len(parts) == 2 {
+		end := strings.TrimSpace(parts[1])
+		if end < "4" {
+			t.Errorf("first resource end line should be >=4 (not closed early by brace in string), got end=%s", end)
+		}
+	}
+}
+
+// TestGenerate_HCL_HeredocBody is the regression test for the heredoc brace
+// bug. Braces inside a heredoc body must not affect block depth.
+func TestGenerate_HCL_HeredocBody(t *testing.T) {
+	src := `resource "aws_iam_policy" "example" {
+  name   = "example"
+  policy = <<EOT
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": "s3:GetObject",
+    "Resource": "*"
+  }]
+}
+EOT
+}
+
+resource "aws_s3_bucket" "other" {
+  bucket = "my-bucket"
+}
+`
+	fm, ok := filemap.Generate(src, "iam.tf")
+	if !ok {
+		t.Fatal("expected deterministic map")
+	}
+	if len(fm.Map) != 2 {
+		t.Fatalf("expected 2 map entries (heredoc braces closed first block early), got %d: %v", len(fm.Map), fm.Map)
+	}
+	// Both resources must appear as symbols.
+	symbolSet := map[string]bool{}
+	for _, s := range fm.Symbols {
+		symbolSet[s] = true
+	}
+	if !symbolSet["resource aws_iam_policy.example"] {
+		t.Errorf("expected 'resource aws_iam_policy.example' in %v", fm.Symbols)
+	}
+	if !symbolSet["resource aws_s3_bucket.other"] {
+		t.Errorf("expected 'resource aws_s3_bucket.other' in %v", fm.Symbols)
+	}
+}
+
 func TestGenerate_HCL_DotHCLExtension(t *testing.T) {
 	src := `variable "cluster_name" {
   type = string
