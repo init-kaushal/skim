@@ -19,6 +19,7 @@
 //   - .sql     — CREATE TABLE/INDEX/VIEW/FUNCTION/PROCEDURE, ALTER TABLE DDL
 //   - .graphql/.gql/.graphqls — type, input, interface, enum, union, scalar, operations
 //   - .rb/.gemspec           — class/module definitions with method lists
+//   - .kt/.kts               — class/interface/object/fun definitions with function lists
 //
 // All other extensions fall through to the worker path.
 package filemap
@@ -182,6 +183,13 @@ func Generate(src, filePath string) (digest.FileMap, bool) {
 
 	case ".rb", ".gemspec":
 		fm, ok := parseRubyFile(src, filePath)
+		if !ok {
+			return digest.FileMap{}, false
+		}
+		return fm, true
+
+	case ".kt", ".kts":
+		fm, ok := parseKotlinFile(src, filePath)
 		if !ok {
 			return digest.FileMap{}, false
 		}
