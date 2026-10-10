@@ -10,6 +10,7 @@
 //   - .rs       — regex scan; pub/private filtering, traits, enums, impl blocks
 //   - .json     — encoding/json; top-level keys with value shapes; lock files excluded
 //   - .yml/.yaml — indent scan; Docker Compose, Kubernetes, GitHub Actions recognized
+//   - .toml     — line scan; table headers, Cargo.toml and pyproject.toml recognized
 //
 // All other extensions fall through to the worker path.
 package filemap
@@ -84,6 +85,13 @@ func Generate(src, filePath string) (digest.FileMap, bool) {
 
 	case ".yml", ".yaml":
 		fm, err := parseYAMLFile(src, filePath)
+		if err != nil {
+			return digest.FileMap{}, false
+		}
+		return fm, true
+
+	case ".toml":
+		fm, err := parseTOMLFile(src, filePath)
 		if err != nil {
 			return digest.FileMap{}, false
 		}
