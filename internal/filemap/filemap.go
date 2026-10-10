@@ -15,6 +15,7 @@
 //   - Makefile / GNUmakefile / *.mk — explicit targets with first recipe line
 //   - .sh/.bash/.zsh/.fish and common rc/profile names — function extraction
 //   - .tf/.hcl — resource, data, variable, output, module, provider blocks; lock file excluded
+//   - .proto   — message, service (with RPC list), enum, extend blocks
 //
 // All other extensions fall through to the worker path.
 package filemap
@@ -150,6 +151,13 @@ func Generate(src, filePath string) (digest.FileMap, bool) {
 			return digest.FileMap{}, false
 		}
 		fm, err := parseHCLFile(src, filePath)
+		if err != nil {
+			return digest.FileMap{}, false
+		}
+		return fm, true
+
+	case ".proto":
+		fm, err := parseProtoFile(src, filePath)
 		if err != nil {
 			return digest.FileMap{}, false
 		}
