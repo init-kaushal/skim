@@ -56,9 +56,7 @@ func parseShellFile(src, filePath string) (digest.FileMap, error) {
 			generated = true
 			break
 		}
-		if shellShebang.MatchString(l) {
-			break // shebang on line 1 is expected; generation marker comes later
-		}
+		// Shebang is expected on line 1; skip it and keep checking for markers.
 	}
 
 	// Collect sourced files and exported variables for the symbol list.

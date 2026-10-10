@@ -199,6 +199,61 @@ greet_user() {
 	}
 }
 
+// TestGenerate_Shell_GeneratedMarkerAfterShebang is the regression test for the
+// bug where the generated-detection loop broke on the shebang and never
+// examined subsequent lines.
+func TestGenerate_Shell_GeneratedMarkerAfterShebang(t *testing.T) {
+	src := `#!/usr/bin/env bash
+# @generated — DO NOT EDIT
+
+do_thing() {
+	echo "thing"
+}
+`
+	fm, ok := filemap.Generate(src, "generated.sh")
+	if !ok {
+		t.Fatal("expected deterministic map")
+	}
+	if !strings.Contains(fm.Summary, "generated") {
+		t.Errorf("expected 'generated' in Summary for @generated script, got: %s", fm.Summary)
+	}
+}
+
+// TestGenerate_Shell_BraceInString is the regression test for the known
+// limitation that brace counting is not shell-aware. A closing brace inside
+// a double-quoted string can cause the function's recorded end line to be
+// shorter than the true function body. The test documents the current
+// behaviour; a full fix is deferred.
+func TestGenerate_Shell_BraceInString(t *testing.T) {
+	src := `#!/bin/bash
+# function that contains a brace inside a string
+describe() {
+	echo "result: }"
+	echo "done"
+}
+
+other() {
+	echo "other"
+}
+`
+	fm, ok := filemap.Generate(src, "brace.sh")
+	// The map may or may not be accurate here — the test only checks that the
+	// parser does not crash and still produces entries for both functions.
+	if !ok {
+		t.Fatal("expected deterministic map (even if line ranges are imprecise)")
+	}
+	names := map[string]bool{}
+	for _, s := range fm.Symbols {
+		names[s] = true
+	}
+	if !names["describe"] {
+		t.Errorf("expected 'describe' in symbols %v", fm.Symbols)
+	}
+	if !names["other"] {
+		t.Errorf("expected 'other' in symbols %v", fm.Symbols)
+	}
+}
+
 func TestGenerate_Shell_DotShExtension(t *testing.T) {
 	src := `#!/bin/sh
 build() { go build ./...; }
