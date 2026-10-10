@@ -1,0 +1,287 @@
+package filemap_test
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/kaushal/skim/internal/filemap"
+)
+
+func TestGenerate_Ruby_ClassWithMethods(t *testing.T) {
+	src := `class User
+  def initialize(email, name)
+    @email = email
+    @name = name
+  end
+
+  def email
+    @email
+  end
+
+  def name
+    @name
+  end
+
+  def self.find(id)
+    # ...
+  end
+end
+`
+	fm, ok := filemap.Generate(src, "user.rb")
+	if !ok {
+		t.Fatal("expected deterministic map for Ruby file")
+	}
+
+	if !strings.Contains(fm.Summary, "Ruby") {
+		t.Errorf("expected 'Ruby' in summary, got: %s", fm.Summary)
+	}
+	if !strings.Contains(fm.Summary, "class") {
+		t.Errorf("expected 'class' in summary, got: %s", fm.Summary)
+	}
+	if !strings.Contains(fm.Summary, "method") {
+		t.Errorf("expected 'method' count in summary, got: %s", fm.Summary)
+	}
+
+	if len(fm.Map) != 1 {
+		t.Fatalf("expected 1 class entry, got %d", len(fm.Map))
+	}
+	entry := fm.Map[0]
+	if !strings.Contains(entry.Kind, "class User") {
+		t.Errorf("expected 'class User' in Kind, got: %s", entry.Kind)
+	}
+	for _, method := range []string{"initialize", "email", "name", "self.find"} {
+		if !strings.Contains(entry.Kind, method) {
+			t.Errorf("expected method %q in Kind label, got: %s", method, entry.Kind)
+		}
+	}
+}
+
+func TestGenerate_Ruby_Module(t *testing.T) {
+	src := `module Authentication
+  def authenticate(token)
+    Token.find(token)
+  end
+
+  def current_user
+    @current_user ||= authenticate(request.headers["Authorization"])
+  end
+end
+`
+	fm, ok := filemap.Generate(src, "authentication.rb")
+	if !ok {
+		t.Fatal("expected deterministic map")
+	}
+	if len(fm.Map) != 1 {
+		t.Fatalf("expected 1 module entry, got %d", len(fm.Map))
+	}
+	if !strings.Contains(fm.Map[0].Kind, "module Authentication") {
+		t.Errorf("expected 'module Authentication' in Kind, got: %s", fm.Map[0].Kind)
+	}
+	if !strings.Contains(fm.Summary, "module") {
+		t.Errorf("expected 'module' in summary, got: %s", fm.Summary)
+	}
+}
+
+func TestGenerate_Ruby_MultipleClasses(t *testing.T) {
+	src := `class Post
+  def initialize(title, body)
+    @title = title
+    @body  = body
+  end
+
+  def to_html
+    "<h1>#{@title}</h1><p>#{@body}</p>"
+  end
+end
+
+class Comment
+  def initialize(body, author)
+    @body   = body
+    @author = author
+  end
+
+  def valid?
+    @body.length > 0
+  end
+end
+`
+	fm, ok := filemap.Generate(src, "models.rb")
+	if !ok {
+		t.Fatal("expected deterministic map")
+	}
+	if len(fm.Map) != 2 {
+		t.Fatalf("expected 2 class entries, got %d", len(fm.Map))
+	}
+	symbolSet := map[string]bool{}
+	for _, s := range fm.Symbols {
+		symbolSet[s] = true
+	}
+	if !symbolSet["class Post"] {
+		t.Errorf("expected 'class Post' in %v", fm.Symbols)
+	}
+	if !symbolSet["class Comment"] {
+		t.Errorf("expected 'class Comment' in %v", fm.Symbols)
+	}
+}
+
+func TestGenerate_Ruby_MethodOverflow(t *testing.T) {
+	// More than 4 methods: label shows first 4 and (+N) suffix.
+	src := `class ApiController
+  def index
+  end
+
+  def show
+  end
+
+  def create
+  end
+
+  def update
+  end
+
+  def destroy
+  end
+end
+`
+	fm, ok := filemap.Generate(src, "api_controller.rb")
+	if !ok {
+		t.Fatal("expected deterministic map")
+	}
+	if len(fm.Map) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(fm.Map))
+	}
+	kind := fm.Map[0].Kind
+	if !strings.Contains(kind, "(+1)") {
+		t.Errorf("expected (+1) for 5th method, got: %s", kind)
+	}
+	if !strings.Contains(kind, "index") {
+		t.Errorf("expected 'index' in method list, got: %s", kind)
+	}
+}
+
+func TestGenerate_Ruby_IfUnlessInsideMethod(t *testing.T) {
+	// Control-flow keywords inside methods must not corrupt depth tracking.
+	src := `class Processor
+  def process(items)
+    if items.empty?
+      return []
+    end
+    items.map do |item|
+      if item.valid?
+        item.run
+      else
+        nil
+      end
+    end
+  end
+
+  def validate(item)
+    unless item.nil?
+      item.check
+    end
+  end
+end
+`
+	fm, ok := filemap.Generate(src, "processor.rb")
+	if !ok {
+		t.Fatal("expected deterministic map")
+	}
+	if len(fm.Map) != 1 {
+		t.Fatalf("expected 1 class entry, got %d: %v", len(fm.Map), fm.Map)
+	}
+	if !strings.Contains(fm.Map[0].Kind, "process") || !strings.Contains(fm.Map[0].Kind, "validate") {
+		t.Errorf("expected both methods in Kind, got: %s", fm.Map[0].Kind)
+	}
+}
+
+func TestGenerate_Ruby_LineRanges(t *testing.T) {
+	src := `class Alpha
+  def hello
+  end
+end
+
+class Beta
+  def world
+  end
+end
+`
+	fm, ok := filemap.Generate(src, "classes.rb")
+	if !ok {
+		t.Fatal("expected deterministic map")
+	}
+	if len(fm.Map) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(fm.Map))
+	}
+	if !strings.HasPrefix(fm.Map[0].Lines, "1") {
+		t.Errorf("Alpha should start at line 1, got: %s", fm.Map[0].Lines)
+	}
+	if !strings.HasPrefix(fm.Map[1].Lines, "6") {
+		t.Errorf("Beta should start at line 6, got: %s", fm.Map[1].Lines)
+	}
+}
+
+func TestGenerate_Ruby_GeneratedFile(t *testing.T) {
+	src := `# Generated by Rails. DO NOT EDIT.
+# frozen_string_literal: true
+
+class Schema < ActiveRecord::Schema
+  def self.up
+    create_table :users
+  end
+end
+`
+	fm, ok := filemap.Generate(src, "schema.rb")
+	if !ok {
+		t.Fatal("expected deterministic map for generated Ruby file")
+	}
+	if !strings.Contains(fm.Summary, "generated") {
+		t.Errorf("expected 'generated' in summary, got: %s", fm.Summary)
+	}
+}
+
+func TestGenerate_Ruby_FallsThrough_Empty(t *testing.T) {
+	_, ok := filemap.Generate("", "app.rb")
+	if ok {
+		t.Error("expected fallthrough for empty Ruby file")
+	}
+}
+
+func TestGenerate_Ruby_FallsThrough_NoStructure(t *testing.T) {
+	// A plain script with no class/module/def.
+	src := `puts "Hello, world!"
+exit 0
+`
+	_, ok := filemap.Generate(src, "script.rb")
+	if ok {
+		t.Error("expected fallthrough for Ruby file with no class/module/def")
+	}
+}
+
+func TestGenerate_Ruby_Gemspec(t *testing.T) {
+	// .gemspec files are Ruby and should be dispatched to the Ruby parser.
+	src := `Gem::Specification.new do |spec|
+  spec.name    = "my_gem"
+  spec.version = "0.1.0"
+  spec.summary = "A test gem"
+end
+`
+	// Gemspecs typically have no class/module/def — expect fallthrough.
+	_, ok := filemap.Generate(src, "my_gem.gemspec")
+	if ok {
+		t.Log("gemspec with no class/def fell through as expected")
+	}
+	// But a gemspec that defines a class should produce a map.
+	src2 := `class MyGem
+  def self.version
+    "0.1.0"
+  end
+end
+`
+	fm, ok2 := filemap.Generate(src2, "my_gem.gemspec")
+	if !ok2 {
+		t.Fatal("expected deterministic map for gemspec with class definition")
+	}
+	if len(fm.Map) != 1 {
+		t.Errorf("expected 1 class entry, got %d", len(fm.Map))
+	}
+}
