@@ -10,8 +10,10 @@ import (
 
 var (
 	// protoTopBlock matches a top-level proto block opener.
-	// Groups: (1) block type, (2) name
-	protoTopBlock = regexp.MustCompile(`^(message|service|enum|extend)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{`)
+	// The name group allows dots so that extend targets can use fully qualified
+	// names: extend google.protobuf.FieldOptions { ... }
+	// Groups: (1) block type, (2) name (possibly dot-separated)
+	protoTopBlock = regexp.MustCompile(`^(message|service|enum|extend)\s+([A-Za-z_][A-Za-z0-9_.]*)\s*\{`)
 	// protoRPC matches an rpc definition inside a service block.
 	// Groups: (1) rpc name, (2) request type, (3) response type
 	protoRPC = regexp.MustCompile(`^\s*rpc\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s+returns\s+\(([^)]*)\)`)

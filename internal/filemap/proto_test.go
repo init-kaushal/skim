@@ -188,6 +188,49 @@ message Generated {
 	}
 }
 
+// TestGenerate_Proto_ExtendFullyQualified is the regression test for the bug
+// where extend blocks with a dot-separated extendee (e.g. google.protobuf.FieldOptions)
+// were not recognized because the name regex didn't allow dots.
+func TestGenerate_Proto_ExtendFullyQualified(t *testing.T) {
+	src := `syntax = "proto2";
+
+import "google/protobuf/descriptor.proto";
+
+extend google.protobuf.FieldOptions {
+  optional string custom_field = 50001;
+}
+
+extend google.protobuf.MessageOptions {
+  optional bool deprecated_reason = 50002;
+}
+
+message MyMessage {
+  string name = 1;
+}
+`
+	fm, ok := filemap.Generate(src, "options.proto")
+	if !ok {
+		t.Fatal("expected deterministic map for proto file with fully qualified extend targets")
+	}
+
+	symbolSet := map[string]bool{}
+	for _, s := range fm.Symbols {
+		symbolSet[s] = true
+	}
+	if !symbolSet["extend google.protobuf.FieldOptions"] {
+		t.Errorf("expected 'extend google.protobuf.FieldOptions' in symbols %v", fm.Symbols)
+	}
+	if !symbolSet["extend google.protobuf.MessageOptions"] {
+		t.Errorf("expected 'extend google.protobuf.MessageOptions' in symbols %v", fm.Symbols)
+	}
+	if !symbolSet["message MyMessage"] {
+		t.Errorf("expected 'message MyMessage' in symbols %v", fm.Symbols)
+	}
+	if len(fm.Map) != 3 {
+		t.Errorf("expected 3 entries, got %d: %v", len(fm.Map), fm.Map)
+	}
+}
+
 func TestGenerate_Proto_FallsThrough_Empty(t *testing.T) {
 	_, ok := filemap.Generate("", "service.proto")
 	if ok {
