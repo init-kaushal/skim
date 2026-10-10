@@ -13,6 +13,7 @@
 //   - .toml     — line scan; table headers, Cargo.toml and pyproject.toml recognized
 //   - Dockerfile / *.dockerfile — FROM stages with instruction verb summary
 //   - Makefile / GNUmakefile / *.mk — explicit targets with first recipe line
+//   - .sh/.bash/.zsh/.fish and common rc/profile names — function extraction
 //
 // All other extensions fall through to the worker path.
 package filemap
@@ -131,6 +132,26 @@ func Generate(src, filePath string) (digest.FileMap, bool) {
 
 	case ".mk", ".make":
 		fm, err := parseMakefile(src, filePath)
+		if err != nil {
+			return digest.FileMap{}, false
+		}
+		return fm, true
+
+	case ".sh", ".bash", ".zsh", ".fish", ".ksh", ".dash":
+		fm, err := parseShellFile(src, filePath)
+		if err != nil {
+			return digest.FileMap{}, false
+		}
+		return fm, true
+	}
+
+	// Shell rc/profile files have no extension; match by basename.
+	switch base {
+	case ".bashrc", ".bash_profile", ".bash_logout", ".bash_aliases",
+		".zshrc", ".zshenv", ".zprofile", ".zlogin", ".zlogout",
+		".profile", ".shrc",
+		"install.sh", "setup.sh", "run.sh", "entrypoint.sh":
+		fm, err := parseShellFile(src, filePath)
 		if err != nil {
 			return digest.FileMap{}, false
 		}

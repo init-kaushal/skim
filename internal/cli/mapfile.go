@@ -21,7 +21,7 @@ func Map(w io.Writer, path string) error {
 	fm, ok := filemap.Generate(string(src), path)
 	if !ok {
 		fmt.Fprintf(w, "no deterministic map available for %s\n", path)
-		fmt.Fprintln(w, "(file type not supported or content not valid Go)")
+		fmt.Fprintln(w, "(file type not supported or content could not be parsed)")
 		return nil
 	}
 
