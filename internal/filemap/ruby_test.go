@@ -239,6 +239,91 @@ end
 	}
 }
 
+// TestGenerate_Ruby_EndlessMethods is the regression test for the bug where
+// endless method syntax (def foo = expr) was not recognized as a single-line
+// form, so the parser incremented depth without ever decrementing it, causing
+// subsequent classes to be merged into the first one's range.
+func TestGenerate_Ruby_EndlessMethods(t *testing.T) {
+	src := `class Alpha
+  def greeting = "hello"
+  def double(x) = x * 2
+  def self.version = "1.0"
+end
+
+class Beta
+  def farewell = "goodbye"
+end
+`
+	fm, ok := filemap.Generate(src, "endless.rb")
+	if !ok {
+		t.Fatal("expected deterministic map")
+	}
+	if len(fm.Map) != 2 {
+		t.Fatalf("expected 2 class entries (endless method depth bug), got %d: %v", len(fm.Map), fm.Map)
+	}
+	// Alpha should list its endless methods.
+	alpha := fm.Map[0].Kind
+	if !strings.Contains(alpha, "greeting") {
+		t.Errorf("expected 'greeting' in Alpha Kind, got: %s", alpha)
+	}
+	if !strings.Contains(alpha, "double") {
+		t.Errorf("expected 'double' in Alpha Kind, got: %s", alpha)
+	}
+	// Beta should be a separate entry.
+	if !strings.Contains(fm.Map[1].Kind, "Beta") {
+		t.Errorf("expected Beta as second entry, got: %s", fm.Map[1].Kind)
+	}
+}
+
+// TestGenerate_Ruby_HeredocIndented verifies that <<~MARKER form heredocs are
+// handled and that code-like content inside the body (def, end, class lines)
+// doesn't affect class or method detection.
+func TestGenerate_Ruby_HeredocIndented(t *testing.T) {
+	src := `class Migrator
+  SCHEMA_SQL = <<~SQL
+    CREATE TABLE users (
+      id   BIGSERIAL PRIMARY KEY
+    );
+    CREATE INDEX idx_users ON users (id);
+  SQL
+
+  RUBY_DOC = <<~RUBY
+    def fake_method
+      # this is documentation, not real Ruby
+    end
+    class FakeClass; end
+  RUBY
+
+  def migrate
+    execute(SCHEMA_SQL)
+  end
+
+  def rollback
+    execute("DROP TABLE users;")
+  end
+end
+`
+	fm, ok := filemap.Generate(src, "migrator.rb")
+	if !ok {
+		t.Fatal("expected deterministic map")
+	}
+	// Only one class — heredoc body must not create phantom entries.
+	if len(fm.Map) != 1 {
+		t.Fatalf("expected 1 class entry (heredoc body leaked), got %d: %v", len(fm.Map), fm.Map)
+	}
+	kind := fm.Map[0].Kind
+	if !strings.Contains(kind, "migrate") {
+		t.Errorf("expected 'migrate' in Kind, got: %s", kind)
+	}
+	if !strings.Contains(kind, "rollback") {
+		t.Errorf("expected 'rollback' in Kind, got: %s", kind)
+	}
+	// fake_method and FakeClass from inside the heredoc must NOT appear.
+	if strings.Contains(kind, "fake_method") || strings.Contains(kind, "FakeClass") {
+		t.Errorf("heredoc body leaked into map: %s", kind)
+	}
+}
+
 func TestGenerate_Ruby_FallsThrough_Empty(t *testing.T) {
 	_, ok := filemap.Generate("", "app.rb")
 	if ok {

@@ -25,6 +25,10 @@ var (
 	rubyDoBlock = regexp.MustCompile(`\bdo\s*(?:\|[^|]*\|)?\s*(?:#.*)?$`)
 	// rubyOneliner matches a def that ends on the same line (one-liner method).
 	rubyOneliner = regexp.MustCompile(`^\s*def\s+.*\bend\b`)
+	// rubyEndless matches Ruby's endless method syntax: def name = expr
+	// or def name(args) = expr. These are single-expression methods with no
+	// closing end keyword; they must not increment block depth.
+	rubyEndless = regexp.MustCompile(`^\s*def\s+((?:self\.)?[A-Za-z_][A-Za-z0-9_?!]*)(?:\([^)]*\))?\s*=\s`)
 	// rubyComment matches Ruby line comments.
 	rubyComment = regexp.MustCompile(`^\s*#`)
 	// rubyHeredocOpen matches the start of a heredoc: <<~MARKER or <<-MARKER or <<MARKER
@@ -108,6 +112,23 @@ func parseRubyFile(src, _ string) (digest.FileMap, bool) {
 				if m := rubyDef.FindStringSubmatch(raw); m != nil {
 					name := rubyMethodName(m[1], m[2])
 					cur.methods = append(cur.methods, name)
+				}
+			}
+			continue
+		}
+
+		// Endless methods (def foo = expr) have no closing end keyword.
+		// They must be detected here, before rubyDef, so we don't increment
+		// depth for a block that will never be closed.
+		if m := rubyEndless.FindStringSubmatch(raw); m != nil {
+			if cur != nil && depth == 1 {
+				// m[1] is "self.name" or "name"; split into receiver+name parts
+				// the same way rubyMethodName expects.
+				full := m[1]
+				if strings.HasPrefix(full, "self.") {
+					cur.methods = append(cur.methods, full) // already "self.name"
+				} else {
+					cur.methods = append(cur.methods, full)
 				}
 			}
 			continue
