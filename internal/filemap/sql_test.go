@@ -158,6 +158,35 @@ $$ LANGUAGE plpgsql;
 	}
 }
 
+// TestGenerate_SQL_PostgresFunctionInlineAS is the regression test for the bug
+// where the opening $$ delimiter on the same line as CREATE FUNCTION was not
+// detected, causing the semicolon inside the body to close the statement early.
+func TestGenerate_SQL_PostgresFunctionInlineAS(t *testing.T) {
+	src := `CREATE FUNCTION update_user() RETURNS trigger AS $$
+BEGIN
+    UPDATE users SET updated_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE FUNCTION another_func() RETURNS void AS $$
+BEGIN
+    DELETE FROM sessions WHERE expires_at < NOW();
+END;
+$$ LANGUAGE plpgsql;
+`
+	fm, ok := filemap.Generate(src, "triggers.sql")
+	if !ok {
+		t.Fatal("expected deterministic map")
+	}
+	if len(fm.Map) != 2 {
+		t.Fatalf("expected 2 function entries (inline AS $$ bug: semicolon in body closed statement early), got %d: %v", len(fm.Map), fm.Map)
+	}
+	if !strings.Contains(fm.Symbols[0], "update_user") {
+		t.Errorf("expected update_user in first symbol, got: %v", fm.Symbols)
+	}
+}
+
 func TestGenerate_SQL_LineRanges(t *testing.T) {
 	src := `CREATE TABLE alpha (
     id BIGSERIAL PRIMARY KEY,

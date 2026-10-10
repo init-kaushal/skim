@@ -163,6 +163,17 @@ func parseSQLFile(src, _ string) (digest.FileMap, error) {
 		// Looking for a new DDL statement.
 		if s := matchSQLStmt(trimmed, lineNo); s != nil {
 			cur = s
+			// A dollar-quote delimiter may appear on the same line that opens
+			// the statement, e.g. "CREATE FUNCTION foo() RETURNS trigger AS $$".
+			// Check here before the semicolon test so we don't close the
+			// statement on a semicolon inside the body.
+			if m := sqlDollarQuote.FindStringSubmatch(raw); m != nil {
+				marker := "$" + m[1] + "$"
+				if strings.Count(raw, marker) == 1 {
+					dollarMarker = marker
+					continue
+				}
+			}
 			// Single-line statement: e.g. "CREATE SEQUENCE foo;"
 			if sqlLineEndsStat(raw) {
 				closeStmt(lineNo)
