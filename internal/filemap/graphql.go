@@ -59,6 +59,7 @@ func parseGraphQLFile(src, _ string) (digest.FileMap, bool) {
 
 	var blocks []*gqlBlock
 	var cur *gqlBlock
+	var curUnion *gqlBlock // tracks a possibly multiline union definition
 	depth := 0
 	inTripleQuote := false
 	anonOpCount := 0
@@ -70,12 +71,20 @@ func parseGraphQLFile(src, _ string) (digest.FileMap, bool) {
 			cur = nil
 		}
 	}
+	closeUnion := func() {
+		if curUnion != nil {
+			blocks = append(blocks, curUnion)
+			curUnion = nil
+		}
+	}
 
 	for i, raw := range lines {
 		lineNo := i + 1
 		trimmed := strings.TrimSpace(raw)
 
 		if trimmed == "" {
+			// A blank line closes any pending multiline union.
+			closeUnion()
 			continue
 		}
 
@@ -98,6 +107,17 @@ func parseGraphQLFile(src, _ string) (digest.FileMap, bool) {
 			continue
 		}
 
+		// Multiline union continuation: lines starting with | extend the range.
+		if curUnion != nil {
+			if strings.HasPrefix(trimmed, "|") {
+				curUnion.endLine = lineNo
+				continue
+			}
+			// Any other non-blank, non-comment line ends the union; fall through
+			// to process this line as the next definition.
+			closeUnion()
+		}
+
 		if cur != nil {
 			depth += gqlNetBraces(raw)
 			if depth <= 0 {
@@ -107,9 +127,10 @@ func parseGraphQLFile(src, _ string) (digest.FileMap, bool) {
 			continue
 		}
 
-		// Union and scalar have no body braces — they're single-line definitions.
+		// Unions have no body braces but can span multiple lines with | members.
+		// Enter curUnion state so continuation lines are captured.
 		if m := gqlUnion.FindStringSubmatch(trimmed); m != nil {
-			blocks = append(blocks, &gqlBlock{kind: "union", name: m[1], startLine: lineNo, endLine: lineNo})
+			curUnion = &gqlBlock{kind: "union", name: m[1], startLine: lineNo, endLine: lineNo}
 			continue
 		}
 		if m := gqlScalar.FindStringSubmatch(trimmed); m != nil {
@@ -157,6 +178,7 @@ func parseGraphQLFile(src, _ string) (digest.FileMap, bool) {
 			continue
 		}
 	}
+	closeUnion()
 	closeBlock(len(lines))
 
 	if len(blocks) == 0 {
