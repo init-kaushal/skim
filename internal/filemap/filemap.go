@@ -17,6 +17,7 @@
 //   - .tf/.hcl — resource, data, variable, output, module, provider blocks; lock file excluded
 //   - .proto   — message, service (with RPC list), enum, extend blocks
 //   - .sql     — CREATE TABLE/INDEX/VIEW/FUNCTION/PROCEDURE, ALTER TABLE DDL
+//   - .graphql/.gql/.graphqls — type, input, interface, enum, union, scalar, operations
 //
 // All other extensions fall through to the worker path.
 package filemap
@@ -167,6 +168,13 @@ func Generate(src, filePath string) (digest.FileMap, bool) {
 	case ".sql":
 		fm, err := parseSQLFile(src, filePath)
 		if err != nil {
+			return digest.FileMap{}, false
+		}
+		return fm, true
+
+	case ".graphql", ".gql", ".graphqls":
+		fm, ok := parseGraphQLFile(src, filePath)
+		if !ok {
 			return digest.FileMap{}, false
 		}
 		return fm, true
