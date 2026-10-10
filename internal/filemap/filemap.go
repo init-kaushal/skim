@@ -20,6 +20,7 @@
 //   - .graphql/.gql/.graphqls — type, input, interface, enum, union, scalar, operations
 //   - .rb/.gemspec           — class/module definitions with method lists
 //   - .kt/.kts               — class/interface/object/fun definitions with function lists
+//   - .java                  — class/interface/enum/record/annotation-type with method lists
 //
 // All other extensions fall through to the worker path.
 package filemap
@@ -190,6 +191,13 @@ func Generate(src, filePath string) (digest.FileMap, bool) {
 
 	case ".kt", ".kts":
 		fm, ok := parseKotlinFile(src, filePath)
+		if !ok {
+			return digest.FileMap{}, false
+		}
+		return fm, true
+
+	case ".java":
+		fm, ok := parseJavaFile(src, filePath)
 		if !ok {
 			return digest.FileMap{}, false
 		}
