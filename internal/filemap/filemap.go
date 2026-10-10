@@ -16,6 +16,7 @@
 //   - .sh/.bash/.zsh/.fish and common rc/profile names — function extraction
 //   - .tf/.hcl — resource, data, variable, output, module, provider blocks; lock file excluded
 //   - .proto   — message, service (with RPC list), enum, extend blocks
+//   - .sql     — CREATE TABLE/INDEX/VIEW/FUNCTION/PROCEDURE, ALTER TABLE DDL
 //
 // All other extensions fall through to the worker path.
 package filemap
@@ -158,6 +159,13 @@ func Generate(src, filePath string) (digest.FileMap, bool) {
 
 	case ".proto":
 		fm, err := parseProtoFile(src, filePath)
+		if err != nil {
+			return digest.FileMap{}, false
+		}
+		return fm, true
+
+	case ".sql":
+		fm, err := parseSQLFile(src, filePath)
 		if err != nil {
 			return digest.FileMap{}, false
 		}
