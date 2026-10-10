@@ -11,6 +11,8 @@
 //   - .json     — encoding/json; top-level keys with value shapes; lock files excluded
 //   - .yml/.yaml — indent scan; Docker Compose, Kubernetes, GitHub Actions recognized
 //   - .toml     — line scan; table headers, Cargo.toml and pyproject.toml recognized
+//   - Dockerfile / *.dockerfile — FROM stages with instruction verb summary
+//   - Makefile / GNUmakefile / *.mk — explicit targets with first recipe line
 //
 // All other extensions fall through to the worker path.
 package filemap
@@ -91,11 +93,49 @@ func Generate(src, filePath string) (digest.FileMap, bool) {
 		return fm, true
 
 	case ".toml":
+		if tomlLockFileNames[base] {
+			return digest.FileMap{}, false
+		}
 		fm, err := parseTOMLFile(src, filePath)
 		if err != nil {
 			return digest.FileMap{}, false
 		}
 		return fm, true
 	}
+
+	// Filename-based dispatch for files without a conventional extension.
+	switch base {
+	case "dockerfile", "containerfile":
+		fm, err := parseDockerfile(src, filePath)
+		if err != nil {
+			return digest.FileMap{}, false
+		}
+		return fm, true
+
+	case "makefile", "gnumakefile", "makefile.inc":
+		fm, err := parseMakefile(src, filePath)
+		if err != nil {
+			return digest.FileMap{}, false
+		}
+		return fm, true
+	}
+
+	// Extension-based dispatch for less common names.
+	switch ext {
+	case ".dockerfile":
+		fm, err := parseDockerfile(src, filePath)
+		if err != nil {
+			return digest.FileMap{}, false
+		}
+		return fm, true
+
+	case ".mk", ".make":
+		fm, err := parseMakefile(src, filePath)
+		if err != nil {
+			return digest.FileMap{}, false
+		}
+		return fm, true
+	}
+
 	return digest.FileMap{}, false
 }

@@ -73,7 +73,18 @@ func Default() Config {
 			`\bcat\s`, `\bcurl\s`, `\btail\s+-n\s+\d{3,}`,
 			`npm\s+(run\s+)?test`, `jest`, `pytest`, `go\s+test`,
 		},
-		PassthroughGlobs: []string{"**/*.md", "**/go.mod", ".claude/**"},
+		PassthroughGlobs: []string{
+				// Documentation and module roots — already correct short-circuits.
+				"**/*.md", "**/go.mod", ".claude/**",
+				// Lock files: exact content required for reproducible builds and
+				// dependency verification. A structural digest is actively wrong.
+				"**/yarn.lock", "**/go.sum", "**/Cargo.lock",
+				"**/Pipfile.lock", "**/pnpm-lock.yaml",
+				// Credential and key material: must never be sent to a worker.
+				"**/.env", "**/.env.*",
+				"**/*.key", "**/*.pem", "**/*.p12", "**/*.pfx",
+				"**/id_rsa", "**/id_ed25519", "**/id_ecdsa", "**/id_dsa",
+			},
 		Model:            "claude-haiku-4-5-20251001",
 		WorkerTimeoutSec: 45,
 		SessionModel:     "claude-opus-5-5",
