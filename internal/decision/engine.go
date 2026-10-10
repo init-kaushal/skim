@@ -91,7 +91,7 @@ func (e *Engine) PlanRead(filePath, content string, lines, bytes int) Plan {
 			Strategy:             cost.StrategyDeterministic,
 			DeterministicFileMap: &fm,
 			WorkerInput:          content,
-			Reason:               "go/ast file map — no worker needed",
+			Reason:               fmt.Sprintf("deterministic file map (%s) — no worker needed", filePath),
 			ReuseCount:           reuseCount,
 		}
 	}
