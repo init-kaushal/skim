@@ -9,8 +9,10 @@ import (
 )
 
 var (
-	// dockerFrom matches FROM lines, capturing the image and optional AS alias.
-	dockerFrom = regexp.MustCompile(`(?i)^FROM\s+(\S+)(?:\s+AS\s+(\S+))?`)
+	// dockerFrom matches FROM lines, skipping any --flag options (e.g.
+	// --platform=$BUILDPLATFORM) before the image name. Captures the image
+	// and the optional AS alias.
+	dockerFrom = regexp.MustCompile(`(?i)^FROM\s+(?:--[a-zA-Z][^\s]*\s+)*(\S+)(?:\s+AS\s+(\S+))?`)
 	// dockerInstruction matches the instruction keyword at the start of a line.
 	dockerInstruction = regexp.MustCompile(`(?i)^(RUN|COPY|ADD|WORKDIR|ENV|ARG|EXPOSE|ENTRYPOINT|CMD|LABEL|USER|VOLUME|HEALTHCHECK|ONBUILD|STOPSIGNAL|SHELL)\s`)
 	// dockerComment is a Dockerfile comment line.

@@ -115,6 +115,35 @@ func TestGenerate_Dockerfile_FallsThrough_Empty(t *testing.T) {
 	}
 }
 
+func TestGenerate_Dockerfile_PlatformFlag(t *testing.T) {
+	// FROM --platform=$BUILDPLATFORM should not capture the flag as the image.
+	src := `FROM --platform=$BUILDPLATFORM golang:1.24 AS builder
+RUN go build ./...
+
+FROM --platform=linux/amd64 alpine:3.19
+COPY --from=builder /out/app /app
+`
+	fm, ok := filemap.Generate(src, "Dockerfile")
+	if !ok {
+		t.Fatal("expected deterministic map for Dockerfile with --platform flags")
+	}
+	if len(fm.Map) != 2 {
+		t.Fatalf("expected 2 stages, got %d", len(fm.Map))
+	}
+	if strings.Contains(fm.Map[0].Kind, "--platform") {
+		t.Errorf("--platform flag should not appear in stage label, got: %s", fm.Map[0].Kind)
+	}
+	if !strings.Contains(fm.Map[0].Kind, "golang:1.24") {
+		t.Errorf("first stage should name the image golang:1.24, got: %s", fm.Map[0].Kind)
+	}
+	if !strings.Contains(fm.Map[0].Kind, "builder") {
+		t.Errorf("first stage should name the alias 'builder', got: %s", fm.Map[0].Kind)
+	}
+	if !strings.Contains(fm.Map[1].Kind, "alpine:3.19") {
+		t.Errorf("second stage should name the image alpine:3.19, got: %s", fm.Map[1].Kind)
+	}
+}
+
 func TestGenerate_Dockerfile_DotDockerfileExtension(t *testing.T) {
 	src := "FROM golang:1.22 AS build\nRUN go build ./...\n"
 	fm, ok := filemap.Generate(src, "backend.dockerfile")
