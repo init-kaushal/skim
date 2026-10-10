@@ -3,6 +3,7 @@ package filemap
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/kaushal/skim/internal/digest"
@@ -73,16 +74,16 @@ func parseJSONObject(src string, dec *json.Decoder, lineOf func(int64) int, file
 
 		keyTok, err := dec.Token()
 		if err != nil {
-			break
+			return digest.FileMap{}, fmt.Errorf("filemap: reading JSON key: %w", err)
 		}
 		key, ok := keyTok.(string)
 		if !ok {
-			break
+			return digest.FileMap{}, fmt.Errorf("filemap: expected string key, got %T", keyTok)
 		}
 
 		var raw json.RawMessage
 		if err := dec.Decode(&raw); err != nil {
-			break
+			return digest.FileMap{}, fmt.Errorf("filemap: decoding value for %q: %w", key, err)
 		}
 		endOff := dec.InputOffset()
 
@@ -100,6 +101,16 @@ func parseJSONObject(src string, dec *json.Decoder, lineOf func(int64) int, file
 			endLine:   endLine,
 			shape:     describeJSONValue(raw),
 		})
+	}
+
+	// Consume the closing '}'.
+	if _, err := dec.Token(); err != nil {
+		return digest.FileMap{}, fmt.Errorf("filemap: incomplete JSON object: %w", err)
+	}
+
+	// Reject trailing non-whitespace after the document.
+	if rest := strings.TrimSpace(src[int(dec.InputOffset()):]); rest != "" {
+		return digest.FileMap{}, fmt.Errorf("filemap: trailing content after JSON document")
 	}
 
 	if len(entries) == 0 {
@@ -141,9 +152,19 @@ func parseJSONArray(src string, dec *json.Decoder, lineOf func(int64) int, fileP
 	for dec.More() {
 		var raw json.RawMessage
 		if err := dec.Decode(&raw); err != nil {
-			break
+			return digest.FileMap{}, fmt.Errorf("filemap: decoding JSON array element: %w", err)
 		}
 		elements = append(elements, raw)
+	}
+
+	// Consume the closing ']'.
+	if _, err := dec.Token(); err != nil {
+		return digest.FileMap{}, fmt.Errorf("filemap: incomplete JSON array: %w", err)
+	}
+
+	// Reject trailing non-whitespace after the document.
+	if rest := strings.TrimSpace(src[int(dec.InputOffset()):]); rest != "" {
+		return digest.FileMap{}, fmt.Errorf("filemap: trailing content after JSON document")
 	}
 
 	if len(elements) == 0 {
@@ -191,17 +212,18 @@ func describeJSONValue(raw json.RawMessage) string {
 			if len(m) == 0 {
 				return "object (empty)"
 			}
-			keys := make([]string, 0, min(len(m), 4))
+			// Collect and sort keys for deterministic output. Map iteration
+			// order is random in Go, so the same nested object would produce
+			// different digest strings across runs — hurting cache hit rates.
+			all := make([]string, 0, len(m))
 			for k := range m {
-				keys = append(keys, k)
-				if len(keys) == 4 {
-					break
-				}
+				all = append(all, k)
 			}
+			sort.Strings(all)
 			if len(m) <= 4 {
-				return fmt.Sprintf("object {%s}", strings.Join(keys, ", "))
+				return fmt.Sprintf("object {%s}", strings.Join(all, ", "))
 			}
-			return fmt.Sprintf("object with %d keys", len(m))
+			return fmt.Sprintf("object {%s, ...} (%d keys)", strings.Join(all[:4], ", "), len(m))
 		}
 		return "object"
 	case '[':

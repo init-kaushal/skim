@@ -160,3 +160,68 @@ func TestGenerate_JSON_EmptyObject(t *testing.T) {
 		t.Error("expected fallthrough for empty JSON object")
 	}
 }
+
+func TestGenerate_JSON_FallsThrough_TruncatedObject(t *testing.T) {
+	// A partial object must never produce a map — the digest would silently
+	// omit configuration that was present in the original file.
+	cases := []string{
+		`{"name": "foo", "version":`,
+		`{"name": "foo"`,
+		`{"name": `,
+		`{`,
+	}
+	for _, src := range cases {
+		_, ok := filemap.Generate(src, "config.json")
+		if ok {
+			t.Errorf("truncated JSON %q must fall through, got a map", src)
+		}
+	}
+}
+
+func TestGenerate_JSON_FallsThrough_TrailingGarbage(t *testing.T) {
+	// Valid JSON followed by non-whitespace trailing content must fall through.
+	// The decoder would silently ignore the extra content; we must reject it.
+	cases := []string{
+		`{"name": "foo"} garbage`,
+		`{"name": "foo"}{"b": 2}`,
+		`[1, 2, 3] extra`,
+	}
+	for _, src := range cases {
+		_, ok := filemap.Generate(src, "config.json")
+		if ok {
+			t.Errorf("JSON with trailing content %q must fall through, got a map", src)
+		}
+	}
+}
+
+func TestGenerate_JSON_FallsThrough_TrailingWhitespaceAllowed(t *testing.T) {
+	// Trailing whitespace after a valid document is normal and must not cause fallthrough.
+	src := `{"name": "ok"}` + "\n   \n"
+	_, ok := filemap.Generate(src, "config.json")
+	if !ok {
+		t.Error("trailing whitespace after valid JSON must not cause fallthrough")
+	}
+}
+
+func TestGenerate_JSON_NestedKeysDeterministic(t *testing.T) {
+	// The nested-object description must be stable across runs regardless of
+	// Go map iteration order. Run multiple times and verify the output is
+	// identical — a cache key built from this description must be stable.
+	src := `{"opts": {"c": 3, "a": 1, "b": 2}}`
+	var last string
+	for i := 0; i < 20; i++ {
+		fm, ok := filemap.Generate(src, "data.json")
+		if !ok {
+			t.Fatal("expected deterministic map")
+		}
+		got := fm.Map[0].Kind
+		if last != "" && got != last {
+			t.Errorf("iteration %d: got %q, prev run gave %q — output is non-deterministic", i, got, last)
+		}
+		last = got
+	}
+	// Also verify the keys appear in sorted order (a, b, c alphabetically).
+	if !strings.Contains(last, "{a, b, c}") {
+		t.Errorf("nested keys not in sorted order: %s (want {a, b, c})", last)
+	}
+}
