@@ -8,6 +8,12 @@ import (
 	"github.com/kaushal/skim/internal/digest"
 )
 
+// tomlLockFileNames are TOML files whose exact content must reach the model
+// verbatim. Cargo.lock pins crate versions; a structural digest is wrong.
+var tomlLockFileNames = map[string]bool{
+	"cargo.lock": true,
+}
+
 var (
 	// tomlTableHeader matches [section] or [section.sub] — standard table.
 	tomlTableHeader = regexp.MustCompile(`^\[([^\[\]]+)\]$`)
