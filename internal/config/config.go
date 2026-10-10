@@ -79,7 +79,7 @@ func Default() Config {
 				// Lock files: exact content required for reproducible builds and
 				// dependency verification. A structural digest is actively wrong.
 				"**/yarn.lock", "**/go.sum", "**/Cargo.lock",
-				"**/Pipfile.lock", "**/pnpm-lock.yaml",
+				"**/Pipfile.lock", "**/pnpm-lock.yaml", "**/Gemfile.lock",
 				// Credential and key material: must never be sent to a worker.
 				"**/.env", "**/.env.*",
 				"**/*.key", "**/*.pem", "**/*.p12", "**/*.pfx",

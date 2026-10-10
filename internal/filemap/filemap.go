@@ -18,6 +18,7 @@
 //   - .proto   — message, service (with RPC list), enum, extend blocks
 //   - .sql     — CREATE TABLE/INDEX/VIEW/FUNCTION/PROCEDURE, ALTER TABLE DDL
 //   - .graphql/.gql/.graphqls — type, input, interface, enum, union, scalar, operations
+//   - .rb/.gemspec           — class/module definitions with method lists
 //
 // All other extensions fall through to the worker path.
 package filemap
@@ -174,6 +175,13 @@ func Generate(src, filePath string) (digest.FileMap, bool) {
 
 	case ".graphql", ".gql", ".graphqls":
 		fm, ok := parseGraphQLFile(src, filePath)
+		if !ok {
+			return digest.FileMap{}, false
+		}
+		return fm, true
+
+	case ".rb", ".gemspec":
+		fm, ok := parseRubyFile(src, filePath)
 		if !ok {
 			return digest.FileMap{}, false
 		}
