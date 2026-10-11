@@ -22,6 +22,7 @@
 //   - .kt/.kts               — class/interface/object/fun definitions with function lists
 //   - .java                  — class/interface/enum/record/annotation-type with method lists
 //   - .swift                 — class/struct/enum/protocol/actor/extension with func lists
+//   - .cs                    — class/struct/interface/enum/record with method lists; namespace blocks
 //
 // All other extensions fall through to the worker path.
 package filemap
@@ -206,6 +207,13 @@ func Generate(src, filePath string) (digest.FileMap, bool) {
 
 	case ".swift":
 		fm, ok := parseSwiftFile(src, filePath)
+		if !ok {
+			return digest.FileMap{}, false
+		}
+		return fm, true
+
+	case ".cs":
+		fm, ok := parseCSharpFile(src, filePath)
 		if !ok {
 			return digest.FileMap{}, false
 		}
