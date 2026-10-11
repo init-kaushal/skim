@@ -322,6 +322,94 @@ enum Asset {
 	}
 }
 
+// TestGenerate_Swift_InlineAttribute is the regression test for the bug where
+// "swiftTopBlock" did not allow attributes before the type keyword. A class
+// or struct annotated inline (e.g. @MainActor final class Foo) was not
+// recognized by the regex, causing hasSwiftStructure to return false and the
+// whole file to fall through to the worker path.
+func TestGenerate_Swift_InlineAttribute(t *testing.T) {
+	// Attribute on the same line as the type keyword.
+	src := `import Foundation
+
+@MainActor final class UserViewModel: ObservableObject {
+    @Published var users: [User] = []
+
+    func load() async {
+        users = await api.fetchUsers()
+    }
+
+    func delete(_ user: User) {
+        users.removeAll { $0.id == user.id }
+    }
+}
+`
+	fm, ok := filemap.Generate(src, "UserViewModel.swift")
+	if !ok {
+		t.Fatal("expected deterministic map for @MainActor annotated class")
+	}
+	if len(fm.Map) != 1 {
+		t.Fatalf("expected 1 entry, got %d: %v", len(fm.Map), fm.Map)
+	}
+	kind := fm.Map[0].Kind
+	if !strings.Contains(kind, "final class UserViewModel") {
+		t.Errorf("expected 'final class UserViewModel' in Kind, got: %s", kind)
+	}
+	for _, fn := range []string{"load", "delete"} {
+		if !strings.Contains(kind, fn) {
+			t.Errorf("expected func %q in Kind, got: %s", fn, kind)
+		}
+	}
+
+	// Attribute on a preceding line (should also work).
+	src2 := `@objc
+class LegacyViewController: UIViewController {
+    @objc func handleTap() {}
+}
+`
+	fm2, ok2 := filemap.Generate(src2, "Legacy.swift")
+	if !ok2 {
+		t.Fatal("expected deterministic map for class with preceding @objc attribute")
+	}
+	if len(fm2.Map) != 1 {
+		t.Fatalf("expected 1 entry, got %d: %v", len(fm2.Map), fm2.Map)
+	}
+	if !strings.Contains(fm2.Map[0].Kind, "class LegacyViewController") {
+		t.Errorf("expected 'class LegacyViewController' in Kind, got: %s", fm2.Map[0].Kind)
+	}
+}
+
+// TestGenerate_Swift_NestedBlockComment is the regression test for nested
+// Swift block comments (/* /* ... */ */). The previous *bool approach would
+// exit the comment on the inner */, leaving subsequent braces uncounted inside
+// the still-open outer comment.
+func TestGenerate_Swift_NestedBlockComment(t *testing.T) {
+	src := `class Outer {
+    /* outer comment start
+       /* inner comment with } brace */
+       still in outer comment with } brace
+    */
+    func realMethod() -> Int { return 42 }
+}
+
+class After {
+    func check() {}
+}
+`
+	fm, ok := filemap.Generate(src, "nested.swift")
+	if !ok {
+		t.Fatal("expected deterministic map")
+	}
+	if len(fm.Map) != 2 {
+		t.Fatalf("expected 2 entries (nested comment '}' corrupted depth?), got %d: %v", len(fm.Map), fm.Map)
+	}
+	if !strings.Contains(fm.Map[0].Kind, "realMethod") {
+		t.Errorf("expected 'realMethod' in Outer Kind, got: %s", fm.Map[0].Kind)
+	}
+	if !strings.Contains(fm.Map[1].Kind, "After") {
+		t.Errorf("expected After as second entry, got: %s", fm.Map[1].Kind)
+	}
+}
+
 func TestGenerate_Swift_FallsThrough_Empty(t *testing.T) {
 	_, ok := filemap.Generate("", "App.swift")
 	if ok {
