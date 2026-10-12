@@ -97,15 +97,18 @@ func parseCSharpFile(src, _ string) (digest.FileMap, bool) {
 			continue
 		}
 
-		// Verbatim/raw string tracking (simplified: toggle on """ or @").
-		tripleCount := strings.Count(trimmed, `"""`)
+		// C# raw string tracking ("""...""").
+		// When already inside a multi-line raw string, wait for closing """.
 		if inTextBlock {
-			if tripleCount%2 == 1 {
+			if strings.Contains(trimmed, `"""`) {
 				inTextBlock = false
 			}
 			continue
 		}
-		if tripleCount%2 == 1 {
+		// Only enter raw-string mode when """ opens on this line but does NOT
+		// close on the same line. Self-contained single-line """ ... """ pairs
+		// are handled inside csNetBraces so braces within them are skipped.
+		if csHasUnclosedTripleQuote(trimmed) {
 			inTextBlock = true
 			continue
 		}
@@ -253,6 +256,25 @@ func csNetBraces(line string, bcDepth *int) int {
 		}
 		switch ch {
 		case '"':
+			// Check for raw string literal """...""".
+			if i+2 < len(line) && line[i+1] == '"' && line[i+2] == '"' {
+				i += 3
+				// Scan for the closing """ on this same line.
+				found := false
+				for i+2 < len(line) {
+					if line[i] == '"' && line[i+1] == '"' && line[i+2] == '"' {
+						i += 2 // loop will advance one more
+						found = true
+						break
+					}
+					i++
+				}
+				if !found {
+					// Multi-line raw string: rest of line is content; stop counting.
+					return depth
+				}
+				break
+			}
 			inStr = true
 		case '\'':
 			i++
@@ -295,6 +317,24 @@ func csNetBraces(line string, bcDepth *int) int {
 		}
 	}
 	return depth
+}
+
+// csHasUnclosedTripleQuote reports whether s contains a """ that opens a raw
+// string literal that does not close on the same line. Self-contained pairs
+// like `"""foo"""` return false; a lone `"""` opener returns true.
+func csHasUnclosedTripleQuote(s string) bool {
+	for {
+		idx := strings.Index(s, `"""`)
+		if idx < 0 {
+			return false
+		}
+		rest := s[idx+3:]
+		closeIdx := strings.Index(rest, `"""`)
+		if closeIdx < 0 {
+			return true // opens but does not close
+		}
+		s = rest[closeIdx+3:] // both open and close on this line; keep scanning
+	}
 }
 
 // isCSharpKeyword reports whether s is a C# keyword that could match as a

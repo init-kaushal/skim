@@ -376,6 +376,72 @@ public partial class UserProto
 	}
 }
 
+// TestGenerate_CSharp_RawStringSingleLine is the regression test for the bug
+// where a single-line raw string """...""" containing braces was not skipped
+// by csNetBraces, causing spurious depth changes that truncated type ranges or
+// hid later declarations.
+func TestGenerate_CSharp_RawStringSingleLine(t *testing.T) {
+	src := `class Example
+{
+    string json = """{"key": {"nested": true}}""";
+    void Run() {}
+}
+
+class Another
+{
+    void Execute() {}
+}
+`
+	fm, ok := filemap.Generate(src, "example.cs")
+	if !ok {
+		t.Fatal("expected deterministic map")
+	}
+	if len(fm.Map) != 2 {
+		t.Fatalf("expected 2 entries (raw string braces corrupted depth?), got %d: %v", len(fm.Map), fm.Map)
+	}
+	if !strings.Contains(fm.Map[0].Kind, "Run") {
+		t.Errorf("expected 'Run' in Example Kind, got: %s", fm.Map[0].Kind)
+	}
+	if !strings.Contains(fm.Map[1].Kind, "Another") {
+		t.Errorf("expected Another as second entry, got: %s", fm.Map[1].Kind)
+	}
+}
+
+// TestGenerate_CSharp_RawStringMultiline verifies that multi-line raw strings
+// are correctly skipped across lines.
+func TestGenerate_CSharp_RawStringMultiline(t *testing.T) {
+	src := `class SqlQueries
+{
+    private const string Query = """
+        SELECT *
+        FROM users
+        WHERE status = 'active'
+        AND data = '{"role": "admin"}'
+    """;
+
+    public List<User> Run(DbContext db) => db.Users.FromSqlRaw(Query).ToList();
+}
+
+class AfterRawString
+{
+    public void Check() {}
+}
+`
+	fm, ok := filemap.Generate(src, "queries.cs")
+	if !ok {
+		t.Fatal("expected deterministic map")
+	}
+	if len(fm.Map) != 2 {
+		t.Fatalf("expected 2 entries (multi-line raw string broke depth?), got %d: %v", len(fm.Map), fm.Map)
+	}
+	if !strings.Contains(fm.Map[0].Kind, "Run") {
+		t.Errorf("expected 'Run' in SqlQueries Kind, got: %s", fm.Map[0].Kind)
+	}
+	if !strings.Contains(fm.Map[1].Kind, "AfterRawString") {
+		t.Errorf("expected AfterRawString as second entry, got: %s", fm.Map[1].Kind)
+	}
+}
+
 func TestGenerate_CSharp_FallsThrough_Empty(t *testing.T) {
 	_, ok := filemap.Generate("", "App.cs")
 	if ok {
