@@ -16,8 +16,19 @@ var (
 	dartTopBlock = regexp.MustCompile(
 		`^\s*(?:(?:@\w+(?:\([^)]*\))?\s+)*)` + // optional annotations
 			`((?:(?:abstract|final|base|interface|sealed|mixin)\s+)*` + // qualifiers in group 1
-			`(?:class|mixin|enum|extension))\s+` + // primary keyword in group 1
+			`(?:class|mixin|enum))\s+` + // primary keyword in group 1 (extension handled separately)
 			`([A-Za-z_$][A-Za-z0-9_$]*)`) // name in group 2
+
+	// dartExtension matches both named and unnamed Dart extension declarations.
+	// Dart supports both:   extension StringX on String { ... }
+	//                  and: extension on String { ... }
+	// The name group is optional; when the engine tries to match a name and then
+	// can't find the "on" keyword, it backtracks and treats the token as the type.
+	// Groups: (1) name (empty for unnamed extensions), (2) on-type (trimmed).
+	dartExtension = regexp.MustCompile(
+		`^\s*extension\s+` +
+			`(?:([A-Za-z_$][A-Za-z0-9_$]*)\s+)?` + // optional name in group 1
+			`on\s+([^{;\n]+)`) // on-type in group 2 (trimmed by caller)
 
 	// dartMethod matches a Dart method declaration at depth 1.
 	// Requires at least one return-type word before the name so control-flow
@@ -30,9 +41,20 @@ var (
 			// One or more return-type words; the generic pattern handles one level of nesting
 			// (e.g. Future<Map<String, dynamic>>) by allowing <…> inside the outer angle brackets.
 			`(?:[A-Za-z_$][\w$]*(?:<[^<>]*(?:<[^<>]*>[^<>]*)*>)?(?:\?|!)?\s+)+` +
-			`(?:get\s+|set\s+)?` + // optional getter/setter keyword
+			`(?:set\s+)?` + // optional set keyword (setters: "set value(v)" — 'set' consumed as return type)
 			`([A-Za-z_$][A-Za-z0-9_$]*)` + // name
-			`\s*\(`) // opening paren (setters and named constructors excluded)
+			`\s*\(`) // opening paren
+
+	// dartGetter matches a Dart getter declaration at depth 1.
+	// Getters have an explicit return type, the "get" keyword, a name, and NO
+	// opening paren — so dartMethod (which requires "(") never captures them.
+	// Groups: (1) name.
+	dartGetter = regexp.MustCompile(
+		`^\s*(?:(?:@\w+(?:\([^)]*\))?\s+)*)` + // optional annotations
+			`(?:(?:static|abstract|external|override|covariant|late|const|final)\s+)*` +
+			`(?:[A-Za-z_$][\w$]*(?:<[^<>]*(?:<[^<>]*>[^<>]*)*>)?(?:\?|!)?\s+)+` + // return type
+			`get\s+` + // 'get' keyword distinguishes from field declarations
+			`([A-Za-z_$][A-Za-z0-9_$]*)`) // name
 
 	dartLineComment = regexp.MustCompile(`^\s*(?:///|//)`)
 	dartImport      = regexp.MustCompile(`^\s*(?:import|export|library|part)\s`)
@@ -109,8 +131,11 @@ func parseDartFile(src, _ string) (digest.FileMap, bool) {
 		if cur != nil {
 			if !startedInBC && !inDouble && !inSingle && depth == 1 {
 				if m := dartMethod.FindStringSubmatch(trimmed); m != nil {
-					name := m[1]
-					if !isDartKeyword(name) {
+					if name := m[1]; isDartMemberName(name) {
+						cur.methods = append(cur.methods, name)
+					}
+				} else if m := dartGetter.FindStringSubmatch(trimmed); m != nil {
+					if name := m[1]; isDartMemberName(name) {
 						cur.methods = append(cur.methods, name)
 					}
 				}
@@ -147,6 +172,23 @@ func parseDartFile(src, _ string) (digest.FileMap, bool) {
 				depth = d
 			} else if !strings.Contains(trimmed, ";") {
 				// Multi-line header (extends/with/implements on next lines).
+				pendingBlock = b
+			}
+			continue
+		}
+
+		if m := dartExtension.FindStringSubmatch(trimmed); m != nil {
+			name := strings.TrimSpace(m[1])
+			if name == "" {
+				// Unnamed extension: label as "on TypeName".
+				name = "on " + strings.TrimSpace(m[2])
+			}
+			b := &dartBlock{kind: "extension", name: name, startLine: lineNo}
+			d := dartNetBraces(raw, &bcDepth, &inDouble, &inSingle)
+			if d > 0 {
+				cur = b
+				depth = d
+			} else if !strings.Contains(trimmed, ";") {
 				pendingBlock = b
 			}
 			continue
@@ -258,6 +300,19 @@ func isDartKeyword(s string) bool {
 	return false
 }
 
+// isDartMemberName returns true when name is a valid Dart member name to collect.
+// Dart methods and getters are always camelCase (lowercase or '_'/'$' first);
+// constructor names start with UpperCase and are false positives caused by
+// modifier backtracking: "const User(...)" → modifier group matches 0 times,
+// "const" becomes the return type, "User" becomes the name. Filter them out.
+func isDartMemberName(name string) bool {
+	if len(name) == 0 || isDartKeyword(name) {
+		return false
+	}
+	first := name[0]
+	return first == '_' || first == '$' || (first >= 'a' && first <= 'z')
+}
+
 func dartBlockLabel(b *dartBlock) string {
 	label := b.kind + " " + b.name
 	if len(b.methods) == 0 {
@@ -328,7 +383,7 @@ func dartSummary(blocks []*dartBlock, generated bool) string {
 
 func hasDartStructure(lines []string) bool {
 	for _, l := range lines {
-		if dartTopBlock.MatchString(l) {
+		if dartTopBlock.MatchString(l) || dartExtension.MatchString(l) {
 			return true
 		}
 	}
