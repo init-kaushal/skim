@@ -23,6 +23,7 @@
 //   - .java                  — class/interface/enum/record/annotation-type with method lists
 //   - .swift                 — class/struct/enum/protocol/actor/extension with func lists
 //   - .cs                    — class/struct/interface/enum/record with method lists; namespace blocks
+//   - .c/.cpp/.cc/.cxx/.h/.hpp/.hh — class/struct/union/enum with method lists; namespace/extern-C transparent
 //
 // All other extensions fall through to the worker path.
 package filemap
@@ -214,6 +215,13 @@ func Generate(src, filePath string) (digest.FileMap, bool) {
 
 	case ".cs":
 		fm, ok := parseCSharpFile(src, filePath)
+		if !ok {
+			return digest.FileMap{}, false
+		}
+		return fm, true
+
+	case ".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hh":
+		fm, ok := parseCppFile(src, filePath)
 		if !ok {
 			return digest.FileMap{}, false
 		}
