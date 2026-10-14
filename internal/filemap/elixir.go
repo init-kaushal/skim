@@ -191,6 +191,7 @@ func parseElixirFile(src, _ string) (digest.FileMap, bool) {
 func elixirNetBlocks(line string, inTriple *bool) int {
 	net := 0
 	inStr := false
+	inSingle := false // single-quoted charlist e.g. 'end' — must not count as block closer
 	for i := 0; i < len(line); i++ {
 		ch := line[i]
 
@@ -203,7 +204,7 @@ func elixirNetBlocks(line string, inTriple *bool) int {
 			continue
 		}
 
-		// Single-line string handling.
+		// Single-line double-quoted string handling.
 		if inStr {
 			if ch == '\\' {
 				i++
@@ -211,6 +212,18 @@ func elixirNetBlocks(line string, inTriple *bool) int {
 			}
 			if ch == '"' {
 				inStr = false
+			}
+			continue
+		}
+
+		// Single-quoted charlist handling (e.g. 'end', 'do').
+		if inSingle {
+			if ch == '\\' {
+				i++
+				continue
+			}
+			if ch == '\'' {
+				inSingle = false
 			}
 			continue
 		}
@@ -223,6 +236,12 @@ func elixirNetBlocks(line string, inTriple *bool) int {
 				continue
 			}
 			inStr = true
+			continue
+		}
+
+		// Single-quoted charlist start.
+		if ch == '\'' {
+			inSingle = true
 			continue
 		}
 

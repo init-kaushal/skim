@@ -324,6 +324,45 @@ end
 	}
 }
 
+// TestGenerate_Elixir_CharlistDoEnd verifies that 'end' and 'do' inside
+// single-quoted charlists do not corrupt block depth. Previously elixirNetBlocks
+// skipped double-quoted strings but not charlists, so 'end' inside a charlist
+// was counted as a block terminator, closing the enclosing module prematurely.
+func TestGenerate_Elixir_CharlistDoEnd(t *testing.T) {
+	src := `defmodule Example do
+  def message do
+    IO.puts('end')
+    IO.puts('do')
+    :ok
+  end
+end
+
+defmodule Another do
+  def run, do: :ok
+end
+`
+	fm, ok := filemap.Generate(src, "charlist.ex")
+	if !ok {
+		t.Fatal("expected deterministic map")
+	}
+	if len(fm.Map) != 2 {
+		t.Fatalf("expected 2 modules, got %d: %v", len(fm.Map), fm.Map)
+	}
+	// Both modules must have correct line ranges.
+	if fm.Map[0].Lines != "1-7" {
+		t.Errorf("Example: expected lines 1-7, got %s", fm.Map[0].Lines)
+	}
+	if fm.Map[1].Lines != "9-11" {
+		t.Errorf("Another: expected lines 9-11, got %s", fm.Map[1].Lines)
+	}
+	if !strings.Contains(fm.Map[0].Kind, "message") {
+		t.Errorf("expected 'message' in Example Kind, got: %s", fm.Map[0].Kind)
+	}
+	if !strings.Contains(fm.Map[1].Kind, "run") {
+		t.Errorf("expected 'run' in Another Kind, got: %s", fm.Map[1].Kind)
+	}
+}
+
 // TestGenerate_Elixir_FallsThrough_Empty verifies that empty files fall through.
 func TestGenerate_Elixir_FallsThrough_Empty(t *testing.T) {
 	_, ok := filemap.Generate("", "empty.ex")
