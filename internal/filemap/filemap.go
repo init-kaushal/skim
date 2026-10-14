@@ -25,6 +25,7 @@
 //   - .cs                    — class/struct/interface/enum/record with method lists; namespace blocks
 //   - .c/.cpp/.cc/.cxx/.h/.hpp/.hh — class/struct/union/enum with method lists; namespace/extern-C transparent
 //   - .scala/.sc                   — class/object/trait/case class/enum with def lists
+//   - .php                         — class/interface/trait/enum with method lists; heredoc skipped
 //
 // All other extensions fall through to the worker path.
 package filemap
@@ -230,6 +231,13 @@ func Generate(src, filePath string) (digest.FileMap, bool) {
 
 	case ".scala", ".sc":
 		fm, ok := parseScalaFile(src, filePath)
+		if !ok {
+			return digest.FileMap{}, false
+		}
+		return fm, true
+
+	case ".php":
+		fm, ok := parsePhpFile(src, filePath)
 		if !ok {
 			return digest.FileMap{}, false
 		}
