@@ -34,8 +34,11 @@ var (
 	// cppTypedefAnon matches "typedef struct/union/enum {" (anonymous typedef).
 	// The type name comes from the closing "} Name;" line.
 	cppTypedefAnon = regexp.MustCompile(`^\s*typedef\s+(struct|union|enum)\s*{`)
-	// cppTypedefClose matches "} TypeName;" which closes a typedef block.
+	// cppTypedefClose matches "} TypeName;" at the start of a line (multi-line typedef close).
 	cppTypedefClose = regexp.MustCompile(`^\s*}\s*([A-Za-z_][A-Za-z0-9_]*)\s*;`)
+	// cppTypedefInline extracts the alias name from a single-line typedef:
+	// "typedef struct { ... } Name;" — matches "} Name;" anywhere in the line.
+	cppTypedefInline = regexp.MustCompile(`}\s*([A-Za-z_][A-Za-z0-9_]*)\s*;`)
 	// cppComment matches single-line C/C++ comments.
 	cppComment = regexp.MustCompile(`^\s*//`)
 	// cppGenerated detects generated C/C++ files.
@@ -76,9 +79,10 @@ func parseCppFile(src, _ string) (digest.FileMap, bool) {
 	var cur *cppBlock
 	var pendingBlock *cppBlock
 	depth := 0
-	outerDepth := 0  // namespace / extern-C outer scope depth
-	bcDepth := 0     // block comment depth (C/C++ does not nest them, but int for uniformity)
-	inTypedef := false // tracking a "typedef struct/union/enum { ... } Name;" block
+	outerDepth := 0       // namespace / extern-C outer scope depth
+	bcDepth := 0          // block comment depth (not nested in C/C++, but int for uniformity)
+	rawStringDelim := ""  // expected closing sequence for a multi-line raw string, e.g. )foo"
+	inTypedef := false    // tracking a "typedef struct/union/enum { ... } Name;" block
 
 	closeBlock := func(endLine int) {
 		if cur != nil {
@@ -97,15 +101,15 @@ func parseCppFile(src, _ string) (digest.FileMap, bool) {
 		}
 
 		startedInBC := bcDepth > 0
+		startedInRaw := rawStringDelim != ""
 
 		if pendingBlock != nil {
-			d := cppNetBraces(raw, &bcDepth)
+			d := cppNetBraces(raw, &bcDepth, &rawStringDelim)
 			if d > 0 {
 				cur = pendingBlock
 				depth = d
 				pendingBlock = nil
 			} else if d < 0 {
-				// Closing brace without opening: discard pending
 				pendingBlock = nil
 			}
 			continue
@@ -113,7 +117,7 @@ func parseCppFile(src, _ string) (digest.FileMap, bool) {
 
 		if cur != nil {
 			// Collect methods at depth 1 BEFORE updating depth.
-			if !startedInBC && depth == 1 && !cppPreprocessor.MatchString(raw) {
+			if !startedInBC && !startedInRaw && depth == 1 && !cppPreprocessor.MatchString(raw) {
 				if m := cppFunction.FindStringSubmatch(trimmed); m != nil {
 					name := m[1]
 					if !isCppKeyword(name) && name != cur.name {
@@ -121,10 +125,9 @@ func parseCppFile(src, _ string) (digest.FileMap, bool) {
 					}
 				}
 			}
-			depth += cppNetBraces(raw, &bcDepth)
+			depth += cppNetBraces(raw, &bcDepth, &rawStringDelim)
 			if depth <= 0 {
 				if inTypedef {
-					// Capture name from "} TypeName;" closing line.
 					if m := cppTypedefClose.FindStringSubmatch(trimmed); m != nil {
 						cur.name = m[1]
 					}
@@ -137,8 +140,8 @@ func parseCppFile(src, _ string) (digest.FileMap, bool) {
 		}
 
 		// Top level (possibly inside a namespace).
-		if startedInBC {
-			cppNetBraces(raw, &bcDepth)
+		if startedInBC || startedInRaw {
+			cppNetBraces(raw, &bcDepth, &rawStringDelim)
 			continue
 		}
 		if cppPreprocessor.MatchString(raw) {
@@ -150,30 +153,39 @@ func parseCppFile(src, _ string) (digest.FileMap, bool) {
 
 		// extern "C" { ... } — track outer depth, don't emit.
 		if cppExternC.MatchString(raw) {
-			d := cppNetBraces(raw, &bcDepth)
+			d := cppNetBraces(raw, &bcDepth, &rawStringDelim)
 			outerDepth += d
 			continue
 		}
 
 		// Namespace block — transparent scope.
 		if cppNamespace.MatchString(raw) {
-			d := cppNetBraces(raw, &bcDepth)
+			d := cppNetBraces(raw, &bcDepth, &rawStringDelim)
 			outerDepth += d
 			continue
 		}
 
 		// C anonymous typedef: "typedef struct { ... } Name;"
-		// The name is unknown until the closing "} Name;" line.
+		// The name is unknown until the closing "} Name;" line. For single-line
+		// forms ("typedef struct { int x; } Point;") d == 0; capture the name
+		// directly without opening a block.
 		if m := cppTypedefAnon.FindStringSubmatch(trimmed); m != nil {
 			kind := strings.TrimSpace(m[1])
-			b := &cppBlock{kind: kind, name: "", startLine: lineNo}
-			d := cppNetBraces(raw, &bcDepth)
+			d := cppNetBraces(raw, &bcDepth, &rawStringDelim)
 			if d > 0 {
+				b := &cppBlock{kind: kind, name: "", startLine: lineNo}
 				cur = b
 				depth = d
 				inTypedef = true
+			} else if d == 0 {
+				// Single-line form: "typedef struct { ... } Name;"
+				// cppTypedefClose is anchored to line-start (for multi-line close),
+				// so use the non-anchored cppTypedefInline to find "} Name;" anywhere.
+				if mc := cppTypedefInline.FindStringSubmatch(trimmed); mc != nil {
+					b := &cppBlock{kind: kind, name: mc[1], startLine: lineNo, endLine: lineNo}
+					blocks = append(blocks, b)
+				}
 			}
-			// If d <= 0, the braces don't open here; skip.
 			continue
 		}
 
@@ -181,19 +193,16 @@ func parseCppFile(src, _ string) (digest.FileMap, bool) {
 		if m := cppTopBlock.FindStringSubmatch(trimmed); m != nil {
 			kind := strings.TrimSpace(m[1])
 			name := m[2]
-			// Strip any trailing "::" qualifiers that snuck into the name.
 			if idx := strings.LastIndex(name, "::"); idx >= 0 {
 				name = name[idx+2:]
 			}
 			b := &cppBlock{kind: kind, name: name, startLine: lineNo}
-			d := cppNetBraces(raw, &bcDepth)
+			d := cppNetBraces(raw, &bcDepth, &rawStringDelim)
 			if d > 0 {
 				cur = b
 				depth = d
 			} else {
-				// No opening brace yet (forward declaration or split header).
-				// Only create pending if the line ends with a type keyword structure
-				// (not a forward decl "class Foo;").
+				// No opening brace yet; forward decl ("class Foo;") or split header.
 				if !strings.Contains(trimmed, ";") {
 					pendingBlock = b
 				}
@@ -202,7 +211,7 @@ func parseCppFile(src, _ string) (digest.FileMap, bool) {
 		}
 
 		// Bare brace changes at the outer level (closing namespace/extern "C").
-		d := cppNetBraces(raw, &bcDepth)
+		d := cppNetBraces(raw, &bcDepth, &rawStringDelim)
 		if d < 0 && outerDepth > 0 {
 			outerDepth += d
 			if outerDepth < 0 {
@@ -237,12 +246,29 @@ func parseCppFile(src, _ string) (digest.FileMap, bool) {
 }
 
 // cppNetBraces counts net brace depth for a C/C++ line, ignoring braces inside
-// double-quoted strings, character literals, // comments, and /* */ block
-// comments. Also handles C++ raw strings R"(...)".
-func cppNetBraces(line string, bcDepth *int) int {
+// double-quoted strings, character literals, // comments, /* */ block comments,
+// and C++ raw strings R"delimiter(...)delimiter". Both bcDepth and rawDelim
+// carry state across lines for multi-line constructs:
+//   - bcDepth: > 0 while inside a /* ... */ block comment.
+//   - rawDelim: non-empty while inside a multi-line raw string; holds the
+//     exact closing sequence (e.g. )foo") needed to end it.
+func cppNetBraces(line string, bcDepth *int, rawDelim *string) int {
 	depth := 0
 	inStr := false
-	for i := 0; i < len(line); i++ {
+
+	// If we're inside a multi-line raw string from a previous line, scan for
+	// the closing delimiter before processing anything else.
+	i := 0
+	if *rawDelim != "" {
+		idx := strings.Index(line, *rawDelim)
+		if idx < 0 {
+			return 0 // still inside the raw string; no structural chars
+		}
+		i = idx + len(*rawDelim) // resume after the closing delimiter
+		*rawDelim = ""
+	}
+
+	for ; i < len(line); i++ {
 		ch := line[i]
 		if *bcDepth > 0 {
 			if ch == '*' && i+1 < len(line) && line[i+1] == '/' {
@@ -277,27 +303,27 @@ func cppNetBraces(line string, bcDepth *int) int {
 			}
 		case 'R':
 			// C++ raw string: R"delimiter(...)delimiter"
-			// Common form is R"(...)" with no custom delimiter.
 			if i+2 < len(line) && line[i+1] == '"' {
-				// Find the opening paren to determine the delimiter.
 				j := i + 2
 				delimStart := j
 				for j < len(line) && line[j] != '(' && line[j] != '"' {
 					j++
 				}
 				if j < len(line) && line[j] == '(' {
-					delim := line[delimStart:j] // custom delimiter (may be empty)
-					// closing sequence: )delimiter"
+					delim := line[delimStart:j]
 					closing := ")" + delim + "\""
 					closeIdx := strings.Index(line[j+1:], closing)
 					if closeIdx >= 0 {
+						// Raw string opens and closes on the same line.
 						i = j + 1 + closeIdx + len(closing) - 1
 					} else {
-						// Raw string doesn't close on this line; skip to end.
+						// Raw string opens here but doesn't close on this line.
+						// Persist the closing sequence for subsequent lines.
+						*rawDelim = closing
 						return depth
 					}
 				}
-				// If no '(' found it's not a raw string, fall through to normal char.
+				// If no '(' found it's not a raw string; fall through.
 			}
 		case '/':
 			if i+1 < len(line) && line[i+1] == '/' {

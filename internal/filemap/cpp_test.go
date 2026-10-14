@@ -347,6 +347,70 @@ public:
 	}
 }
 
+// TestGenerate_Cpp_RawStringMultiline is the regression test for the bug where
+// a multi-line raw string R"(..." that doesn't close on the same line caused
+// subsequent lines to be processed normally, so braces inside the raw string
+// corrupted depth tracking and truncated type ranges.
+func TestGenerate_Cpp_RawStringMultiline(t *testing.T) {
+	src := `class Config {
+public:
+    const char* json = R"({
+        "nested": { "enabled": true }
+    })";
+
+    void load() {}
+};
+
+class Another {
+public:
+    void run() {}
+};
+`
+	fm, ok := filemap.Generate(src, "config.h")
+	if !ok {
+		t.Fatal("expected deterministic map")
+	}
+	if len(fm.Map) != 2 {
+		t.Fatalf("expected 2 entries (multi-line raw string braces corrupted depth?), got %d: %v", len(fm.Map), fm.Map)
+	}
+	if !strings.Contains(fm.Map[0].Kind, "load") {
+		t.Errorf("expected 'load' in Config Kind, got: %s", fm.Map[0].Kind)
+	}
+	if !strings.Contains(fm.Map[1].Kind, "Another") {
+		t.Errorf("expected Another as second entry, got: %s", fm.Map[1].Kind)
+	}
+}
+
+// TestGenerate_Cpp_TypedefSingleLine verifies that a single-line anonymous
+// typedef ("typedef struct { int x; } Point;") is captured correctly.
+// Net brace depth for such a line is 0 (one '{' then one '}'), so the
+// previous d>0 guard would silently discard it.
+func TestGenerate_Cpp_TypedefSingleLine(t *testing.T) {
+	src := `#include <stdint.h>
+
+typedef struct { uint32_t hi; uint32_t lo; } Uuid;
+
+typedef enum { RED, GREEN, BLUE } Color;
+`
+	fm, ok := filemap.Generate(src, "types.h")
+	if !ok {
+		t.Fatal("expected deterministic map")
+	}
+	if len(fm.Map) != 2 {
+		t.Fatalf("expected 2 entries (single-line typedef), got %d: %v", len(fm.Map), fm.Map)
+	}
+	symbolSet := map[string]bool{}
+	for _, s := range fm.Symbols {
+		symbolSet[s] = true
+	}
+	if !symbolSet["struct Uuid"] {
+		t.Errorf("expected 'struct Uuid' in symbols: %v", fm.Symbols)
+	}
+	if !symbolSet["enum Color"] {
+		t.Errorf("expected 'enum Color' in symbols: %v", fm.Symbols)
+	}
+}
+
 func TestGenerate_Cpp_FallsThrough_Empty(t *testing.T) {
 	_, ok := filemap.Generate("", "app.cpp")
 	if ok {
