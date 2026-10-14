@@ -309,6 +309,46 @@ case class UserProto(id: Long, email: String) {
 	}
 }
 
+// TestGenerate_Scala_NestedBlockComment is the regression test for nested
+// Scala block comments (/* /* ... */ */). The previous *bcDepth = 1 approach
+// reset depth to 1 on every "/*", so an inner "*/" would exit the comment
+// while still inside the outer one. Subsequent braces (including the "}" in
+// the outer comment body) then corrupted depth tracking.
+func TestGenerate_Scala_NestedBlockComment(t *testing.T) {
+	src := `class Example {
+  /*
+    outer comment
+    /* nested comment */ } // still inside the outer comment
+  */
+  def run(): Unit = {}
+}
+
+class Another {
+  def execute(): Unit = {}
+}
+`
+	fm, ok := filemap.Generate(src, "nested.scala")
+	if !ok {
+		t.Fatal("expected deterministic map")
+	}
+	if len(fm.Map) != 2 {
+		t.Fatalf("expected 2 entries (nested comment '}' corrupted depth?), got %d: %v", len(fm.Map), fm.Map)
+	}
+	if !strings.Contains(fm.Map[0].Kind, "run") {
+		t.Errorf("expected 'run' in Example Kind, got: %s", fm.Map[0].Kind)
+	}
+	if !strings.Contains(fm.Map[1].Kind, "Another") {
+		t.Errorf("expected Another as second entry, got: %s", fm.Map[1].Kind)
+	}
+	// Verify line ranges are not corrupted.
+	if !strings.HasPrefix(fm.Map[0].Lines, "1") {
+		t.Errorf("Example should start at line 1, got: %s", fm.Map[0].Lines)
+	}
+	if !strings.HasPrefix(fm.Map[1].Lines, "9") {
+		t.Errorf("Another should start at line 9, got: %s", fm.Map[1].Lines)
+	}
+}
+
 func TestGenerate_Scala_FallsThrough_Empty(t *testing.T) {
 	_, ok := filemap.Generate("", "App.scala")
 	if ok {

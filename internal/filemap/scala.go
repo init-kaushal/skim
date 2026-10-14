@@ -212,15 +212,19 @@ func parseScalaFile(src, _ string) (digest.FileMap, bool) {
 
 // scalaNetBraces counts net brace depth for a Scala line, ignoring braces
 // inside double-quoted strings, // comments, and /* */ block comments.
-// bcDepth carries block-comment depth across lines.
+// Scala supports nested block comments (/* /* */ */), so bcDepth is a counter:
+// incremented on each "/*", decremented on each "*/", braces counted only at 0.
 func scalaNetBraces(line string, bcDepth *int) int {
 	depth := 0
 	inStr := false
 	for i := 0; i < len(line); i++ {
 		ch := line[i]
 		if *bcDepth > 0 {
-			if ch == '*' && i+1 < len(line) && line[i+1] == '/' {
-				*bcDepth--
+			if ch == '/' && i+1 < len(line) && line[i+1] == '*' {
+				*bcDepth++ // nested open
+				i++
+			} else if ch == '*' && i+1 < len(line) && line[i+1] == '/' {
+				*bcDepth-- // close one level
 				i++
 			}
 			continue
@@ -243,7 +247,7 @@ func scalaNetBraces(line string, bcDepth *int) int {
 				return depth
 			}
 			if i+1 < len(line) && line[i+1] == '*' {
-				*bcDepth = 1
+				*bcDepth++
 				i++
 			}
 		case '{':
