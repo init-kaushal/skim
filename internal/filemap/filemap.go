@@ -26,6 +26,7 @@
 //   - .c/.cpp/.cc/.cxx/.h/.hpp/.hh — class/struct/union/enum with method lists; namespace/extern-C transparent
 //   - .scala/.sc                   — class/object/trait/case class/enum with def lists
 //   - .php                         — class/interface/trait/enum with method lists; heredoc skipped
+//   - .dart                        — class/mixin/enum/extension with method lists; Dart 3 modifiers
 //
 // All other extensions fall through to the worker path.
 package filemap
@@ -238,6 +239,13 @@ func Generate(src, filePath string) (digest.FileMap, bool) {
 
 	case ".php":
 		fm, ok := parsePhpFile(src, filePath)
+		if !ok {
+			return digest.FileMap{}, false
+		}
+		return fm, true
+
+	case ".dart":
+		fm, ok := parseDartFile(src, filePath)
 		if !ok {
 			return digest.FileMap{}, false
 		}
