@@ -398,6 +398,133 @@ class UserProto
 	}
 }
 
+// TestGenerate_PHP_HeredocInLineComment verifies that <<<LABEL in a // comment
+// does not trigger heredoc mode.
+func TestGenerate_PHP_HeredocInLineComment(t *testing.T) {
+	src := `<?php
+class Example
+{
+    // Example syntax: <<<SQL
+    public function run(): void {}
+}
+
+class Another
+{
+    public function execute(): void {}
+}
+`
+	fm, ok := filemap.Generate(src, "example.php")
+	if !ok {
+		t.Fatal("expected deterministic map")
+	}
+	if len(fm.Map) != 2 {
+		t.Fatalf("expected 2 entries (heredoc in comment entered heredoc mode?), got %d: %v", len(fm.Map), fm.Map)
+	}
+	if !strings.Contains(fm.Map[0].Kind, "run") {
+		t.Errorf("expected 'run' in Example Kind, got: %s", fm.Map[0].Kind)
+	}
+	if !strings.Contains(fm.Map[1].Kind, "Another") {
+		t.Errorf("expected Another as second entry, got: %s", fm.Map[1].Kind)
+	}
+}
+
+// TestGenerate_PHP_HeredocInHashComment verifies that <<<LABEL in a # comment
+// does not trigger heredoc mode.
+func TestGenerate_PHP_HeredocInHashComment(t *testing.T) {
+	src := `<?php
+class Config
+{
+    # heredoc example: <<<EOT
+    public function fetch(): string { return ''; }
+}
+
+class After
+{
+    public function check(): bool { return true; }
+}
+`
+	fm, ok := filemap.Generate(src, "Config.php")
+	if !ok {
+		t.Fatal("expected deterministic map")
+	}
+	if len(fm.Map) != 2 {
+		t.Fatalf("expected 2 entries (# comment heredoc entered heredoc mode?), got %d: %v", len(fm.Map), fm.Map)
+	}
+	if !strings.Contains(fm.Map[1].Kind, "After") {
+		t.Errorf("expected After as second entry, got: %s", fm.Map[1].Kind)
+	}
+}
+
+// TestGenerate_PHP_HeredocInString verifies that <<<LABEL inside a double-quoted
+// string does not trigger heredoc mode.
+func TestGenerate_PHP_HeredocInString(t *testing.T) {
+	src := `<?php
+class Docs
+{
+    private string $hint = "use <<<EOT syntax for multiline strings";
+
+    public function getHint(): string { return $this->hint; }
+}
+
+class After
+{
+    public function process(): void {}
+}
+`
+	fm, ok := filemap.Generate(src, "Docs.php")
+	if !ok {
+		t.Fatal("expected deterministic map")
+	}
+	if len(fm.Map) != 2 {
+		t.Fatalf("expected 2 entries (heredoc in string entered heredoc mode?), got %d: %v", len(fm.Map), fm.Map)
+	}
+	if !strings.Contains(fm.Map[0].Kind, "getHint") {
+		t.Errorf("expected 'getHint' in Docs Kind, got: %s", fm.Map[0].Kind)
+	}
+	if !strings.Contains(fm.Map[1].Kind, "After") {
+		t.Errorf("expected After as second entry, got: %s", fm.Map[1].Kind)
+	}
+}
+
+// TestGenerate_PHP_MultilineString verifies that braces inside a multi-line
+// double-quoted string do not corrupt brace depth tracking.
+func TestGenerate_PHP_MultilineString(t *testing.T) {
+	src := `<?php
+class Template
+{
+    private string $schema = "
+        {
+            required: true,
+            type: 'object'
+        }
+    ";
+
+    public function validate(mixed $value): bool { return true; }
+    public function render(): string { return $this->schema; }
+}
+
+class After
+{
+    public function run(): void {}
+}
+`
+	fm, ok := filemap.Generate(src, "Template.php")
+	if !ok {
+		t.Fatal("expected deterministic map")
+	}
+	if len(fm.Map) != 2 {
+		t.Fatalf("expected 2 entries (multiline string braces corrupted depth?), got %d: %v", len(fm.Map), fm.Map)
+	}
+	for _, m := range []string{"validate", "render"} {
+		if !strings.Contains(fm.Map[0].Kind, m) {
+			t.Errorf("expected method %q in Template Kind, got: %s", m, fm.Map[0].Kind)
+		}
+	}
+	if !strings.Contains(fm.Map[1].Kind, "After") {
+		t.Errorf("expected After as second entry, got: %s", fm.Map[1].Kind)
+	}
+}
+
 func TestGenerate_PHP_FallsThrough_Empty(t *testing.T) {
 	_, ok := filemap.Generate("", "app.php")
 	if ok {
