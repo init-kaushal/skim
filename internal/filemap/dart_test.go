@@ -499,6 +499,102 @@ class User {
 	}
 }
 
+// TestGenerate_Dart_UnnamedExtension verifies that unnamed extension declarations
+// (extension on String { ... }) produce a deterministic map. Previously
+// dartTopBlock required a name, so these fell through without a map.
+func TestGenerate_Dart_UnnamedExtension(t *testing.T) {
+	src := `extension on String {
+  String get capitalized =>
+      isEmpty ? this : '${this[0].toUpperCase()}${substring(1)}';
+
+  String truncate(int max, {String suffix = '...'}) {
+    if (length <= max) return this;
+    return '${substring(0, max)}$suffix';
+  }
+}
+`
+	fm, ok := filemap.Generate(src, "string_ext.dart")
+	if !ok {
+		t.Fatal("expected deterministic map for unnamed extension (fell through?)")
+	}
+	if len(fm.Map) != 1 {
+		t.Fatalf("expected 1 entry, got %d: %v", len(fm.Map), fm.Map)
+	}
+	kind := fm.Map[0].Kind
+	if !strings.Contains(kind, "extension on String") {
+		t.Errorf("expected 'extension on String' in Kind, got: %s", kind)
+	}
+	if !strings.Contains(kind, "truncate") {
+		t.Errorf("expected 'truncate' in Kind, got: %s", kind)
+	}
+}
+
+// TestGenerate_Dart_UnnamedExtensionOnlyFile verifies hasDartStructure works for
+// a file containing only unnamed extensions (no class/mixin/enum).
+func TestGenerate_Dart_UnnamedExtensionOnlyFile(t *testing.T) {
+	src := `extension on int {
+  bool get isEven => this % 2 == 0;
+  bool get isOdd => !isEven;
+  int clamp(int min, int max) => this < min ? min : this > max ? max : this;
+}
+
+extension on List<int> {
+  int get sum => fold(0, (a, b) => a + b);
+  double get mean => isEmpty ? 0 : sum / length;
+}
+`
+	fm, ok := filemap.Generate(src, "number_ext.dart")
+	if !ok {
+		t.Fatal("expected deterministic map — unnamed-extension-only file fell through")
+	}
+	if len(fm.Map) != 2 {
+		t.Fatalf("expected 2 entries, got %d: %v", len(fm.Map), fm.Map)
+	}
+	if !strings.Contains(fm.Map[0].Kind, "extension on int") {
+		t.Errorf("expected 'extension on int', got: %s", fm.Map[0].Kind)
+	}
+	if !strings.Contains(fm.Map[1].Kind, "extension on List") {
+		t.Errorf("expected 'extension on List', got: %s", fm.Map[1].Kind)
+	}
+}
+
+// TestGenerate_Dart_Getters verifies that getter declarations are collected
+// in the Kind label. Previously dartMethod required '(' after the name and
+// never captured arrow-style getters (String get name => ...).
+func TestGenerate_Dart_Getters(t *testing.T) {
+	src := `class User {
+  final String _firstName;
+  final String _lastName;
+  final String _email;
+
+  const User(this._firstName, this._lastName, this._email);
+
+  String get firstName => _firstName;
+  String get lastName => _lastName;
+  String get fullName => '$_firstName $_lastName';
+  String get email => _email;
+  bool get isValid => _email.contains('@');
+}
+`
+	fm, ok := filemap.Generate(src, "user.dart")
+	if !ok {
+		t.Fatal("expected deterministic map")
+	}
+	if len(fm.Map) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(fm.Map))
+	}
+	kind := fm.Map[0].Kind
+	for _, g := range []string{"firstName", "lastName", "fullName"} {
+		if !strings.Contains(kind, g) {
+			t.Errorf("expected getter %q in Kind, got: %s", g, kind)
+		}
+	}
+	// 5 getters: 4 shown + (+1) overflow
+	if !strings.Contains(kind, "(+1)") {
+		t.Errorf("expected (+1) overflow for 5 getters, got: %s", kind)
+	}
+}
+
 func TestGenerate_Dart_FallsThrough_Empty(t *testing.T) {
 	_, ok := filemap.Generate("", "app.dart")
 	if ok {
