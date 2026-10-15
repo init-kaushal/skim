@@ -28,6 +28,7 @@
 //   - .php                         — class/interface/trait/enum with method lists; heredoc skipped
 //   - .dart                        — class/mixin/enum/extension with method lists; Dart 3 modifiers
 //   - .ex/.exs                      — defmodule/defprotocol/defimpl with def/defp lists; do...end depth
+//   - .lua                          — top-level function names; file treated as one module entry
 //
 // All other extensions fall through to the worker path.
 package filemap
@@ -254,6 +255,13 @@ func Generate(src, filePath string) (digest.FileMap, bool) {
 
 	case ".ex", ".exs":
 		fm, ok := parseElixirFile(src, filePath)
+		if !ok {
+			return digest.FileMap{}, false
+		}
+		return fm, true
+
+	case ".lua":
+		fm, ok := parseLuaFile(src, filePath)
 		if !ok {
 			return digest.FileMap{}, false
 		}
