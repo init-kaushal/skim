@@ -405,6 +405,83 @@ end
 	}
 }
 
+// TestGenerate_Lua_MultilineForHeader: "do" on a separate line from "for".
+// The doSkip counter must persist across lines so the syntactic "do" is not
+// counted as a standalone block opener, leaving a later function reachable.
+func TestGenerate_Lua_MultilineForHeader(t *testing.T) {
+	src := `
+for i = 1, 3
+do
+    print(i)
+end
+
+function later()
+end
+`
+	fm, ok := Generate(src, "multifor.lua")
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	kind := fm.Map[0].Kind
+	if !strings.Contains(kind, "later") {
+		t.Errorf("kind %q missing 'later' — multiline for header bug", kind)
+	}
+}
+
+// TestGenerate_Lua_MultilineWhileHeader: "do" on a separate line from "while".
+func TestGenerate_Lua_MultilineWhileHeader(t *testing.T) {
+	src := `
+while true
+do
+    break
+end
+
+function after()
+end
+`
+	fm, ok := Generate(src, "multiwhile.lua")
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	kind := fm.Map[0].Kind
+	if !strings.Contains(kind, "after") {
+		t.Errorf("kind %q missing 'after' — multiline while header bug", kind)
+	}
+}
+
+// TestGenerate_Lua_LongBracketEquals: keywords inside [=[ ]=] and --[=[ ]=]
+// must not affect depth.
+func TestGenerate_Lua_LongBracketEquals(t *testing.T) {
+	src := `
+local s = [==[
+function fake_in_bracket()
+end
+]==]
+
+--[=[
+function also_fake()
+end
+]=]
+
+function real()
+end
+`
+	fm, ok := Generate(src, "longbracket.lua")
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	kind := fm.Map[0].Kind
+	if strings.Contains(kind, "fake_in_bracket") {
+		t.Errorf("kind %q should not contain function from inside [==[ ]==]", kind)
+	}
+	if strings.Contains(kind, "also_fake") {
+		t.Errorf("kind %q should not contain function from inside --[=[ comment", kind)
+	}
+	if !strings.Contains(kind, "real") {
+		t.Errorf("kind %q missing 'real'", kind)
+	}
+}
+
 // TestGenerate_Lua_Deduplication: same function name defined twice (override)
 // appears only once.
 func TestGenerate_Lua_Deduplication(t *testing.T) {

@@ -54,7 +54,11 @@ func parseLuaFile(src, filePath string) (digest.FileMap, bool) {
 	var fns []string
 	seen := make(map[string]bool)
 	depth := 0
-	inLong := false // true while inside a long string/comment [[ ... ]] or --[[ ... ]]
+	// longBracket: -1 = not inside a long bracket; ≥0 = inside level-N bracket.
+	// doSkip: count of pending for/while headers that have not yet seen their "do".
+	// Both persist across lines so multiline headers like "for …\ndo" work correctly.
+	longBracket := -1
+	doSkip := 0
 
 	for _, raw := range lines {
 		trimmed := strings.TrimSpace(raw)
@@ -62,8 +66,8 @@ func parseLuaFile(src, filePath string) (digest.FileMap, bool) {
 			continue
 		}
 
-		// Track that we were inside a long block before scanning this line.
-		wasInLong := inLong
+		// Snapshot before scanning: skip function detection while inside a long block.
+		wasInLong := longBracket >= 0
 
 		// Collect top-level function names BEFORE updating depth so that
 		// `function foo()` at the current depth 0 is captured before the
@@ -84,7 +88,7 @@ func parseLuaFile(src, filePath string) (digest.FileMap, bool) {
 			}
 		}
 
-		depth += luaNetBlocks(raw, &inLong)
+		depth += luaNetBlocks(raw, &longBracket, &doSkip)
 		if depth < 0 {
 			depth = 0
 		}
@@ -112,32 +116,42 @@ func parseLuaFile(src, filePath string) (digest.FileMap, bool) {
 // Opens (+1): function, if, for, while, repeat, { and standalone do.
 // Closes (-1): end, until, }.
 //
-// The doAfterForWhile counter prevents double-counting the syntactic "do"
-// that terminates a "for … do" or "while … do" header: when for/while is
-// seen the counter is incremented; the next "do" decrements it and is not
-// counted as a standalone block opener.
+// longBracket and doSkip persist across calls (owned by the caller):
+//   - longBracket: -1 = not inside a long bracket; ≥0 = inside level-N bracket.
+//     Handles all long-bracket forms including [=[ ]=] and [==[ ]==].
+//   - doSkip: count of for/while headers whose syntactic "do" has not yet been
+//     seen. Persisting this across lines correctly handles multiline headers
+//     where "do" appears on the line after "for"/"while".
 //
-// Content inside "…", '…', [[…]], and --comments is skipped.
-// Long strings/comments are tracked via the persistent inLong flag.
-func luaNetBlocks(line string, inLong *bool) int {
+// Content inside "…", '…', long brackets, and --comments is skipped.
+func luaNetBlocks(line string, longBracket *int, doSkip *int) int {
 	net := 0
 	inStr := false
 	strChar := byte(0)
-	doAfterForWhile := 0 // pending skips for syntactic 'do' after for/while
 
 	for i := 0; i < len(line); i++ {
 		ch := line[i]
 
-		// Inside a long string/comment: look for closing ]].
-		if *inLong {
-			if ch == ']' && i+1 < len(line) && line[i+1] == ']' {
-				*inLong = false
-				i++
+		// Inside a long string or comment: scan for the matching close bracket.
+		// A level-N long bracket closes with ] followed by N '=' signs then ].
+		if *longBracket >= 0 {
+			if ch == ']' {
+				j := i + 1
+				cnt := 0
+				for j < len(line) && line[j] == '=' {
+					cnt++
+					j++
+				}
+				if cnt == *longBracket && j < len(line) && line[j] == ']' {
+					*longBracket = -1
+					i = j
+				}
 			}
 			continue
 		}
 
-		// Single-line string handling.
+		// Single-line string handling (strings don't span lines in Lua
+		// without the long-bracket form, so inStr resets each call).
 		if inStr {
 			if ch == '\\' {
 				i++
@@ -149,21 +163,29 @@ func luaNetBlocks(line string, inLong *bool) int {
 			continue
 		}
 
-		// Detect a single-line comment (--) vs long comment (--[[).
+		// Detect -- (line comment) vs --[=*[ (long comment opener).
 		if ch == '-' && i+1 < len(line) && line[i+1] == '-' {
-			if i+3 < len(line) && line[i+2] == '[' && line[i+3] == '[' {
-				*inLong = true
-				i += 3
-				continue
+			j := i + 2
+			if j < len(line) && line[j] == '[' {
+				level, end := luaLongBracketLevel(line, j)
+				if end >= 0 {
+					*longBracket = level
+					i = end
+					continue
+				}
 			}
 			return net // rest of line is a line comment
 		}
 
-		// Long string opener [[.
-		if ch == '[' && i+1 < len(line) && line[i+1] == '[' {
-			*inLong = true
-			i++
-			continue
+		// Long string opener [=*[.
+		if ch == '[' {
+			level, end := luaLongBracketLevel(line, i)
+			if end >= 0 {
+				*longBracket = level
+				i = end
+				continue
+			}
+			// bare [ — not a long-bracket opener, fall through
 		}
 
 		// String opener.
@@ -198,18 +220,18 @@ func luaNetBlocks(line string, inLong *bool) int {
 			i += len("if") - 1
 		case luaMatchWord(line, i, "for"):
 			net++
-			doAfterForWhile++
+			(*doSkip)++
 			i += len("for") - 1
 		case luaMatchWord(line, i, "while"):
 			net++
-			doAfterForWhile++
+			(*doSkip)++
 			i += len("while") - 1
 		case luaMatchWord(line, i, "repeat"):
 			net++
 			i += len("repeat") - 1
 		case luaMatchWord(line, i, "do"):
-			if doAfterForWhile > 0 {
-				doAfterForWhile-- // syntactic do from for/while — don't count
+			if *doSkip > 0 {
+				(*doSkip)-- // syntactic do from for/while header — don't count
 			} else {
 				net++ // standalone do...end block
 			}
@@ -223,6 +245,25 @@ func luaNetBlocks(line string, inLong *bool) int {
 		}
 	}
 	return net
+}
+
+// luaLongBracketLevel checks whether line[pos] starts a long-bracket opener
+// of the form [=*[ and returns (level, indexOfClosingBracket).
+// Returns (-1, -1) if pos does not start a valid opener.
+func luaLongBracketLevel(line string, pos int) (int, int) {
+	if pos >= len(line) || line[pos] != '[' {
+		return -1, -1
+	}
+	j := pos + 1
+	level := 0
+	for j < len(line) && line[j] == '=' {
+		level++
+		j++
+	}
+	if j >= len(line) || line[j] != '[' {
+		return -1, -1
+	}
+	return level, j
 }
 
 // luaMatchWord returns true when line[pos:] starts with word and the character
