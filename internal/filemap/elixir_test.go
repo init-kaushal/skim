@@ -154,7 +154,7 @@ end
 		t.Fatal("expected deterministic map")
 	}
 	kind := fm.Map[0].Kind
-	if !strings.HasPrefix(kind, "defimpl Jason.Encoder") {
+	if !strings.HasPrefix(kind, "defimpl Jason.Encoder for MyApp.User") {
 		t.Errorf("unexpected Kind: %s", kind)
 	}
 	if !strings.Contains(kind, "encode") {
@@ -162,6 +162,37 @@ end
 	}
 	if !strings.Contains(fm.Summary, "1 impl") {
 		t.Errorf("unexpected Summary: %s", fm.Summary)
+	}
+}
+
+// TestGenerate_Elixir_ImplForTarget verifies that two defimpl blocks for the
+// same protocol but different target types produce distinguishable Kind labels.
+// Previously the label only included the protocol name, making them identical.
+func TestGenerate_Elixir_ImplForTarget(t *testing.T) {
+	src := `defimpl Jason.Encoder, for: MyApp.User do
+  def encode(user, opts), do: Jason.Encode.map(%{name: user.name}, opts)
+end
+
+defimpl Jason.Encoder, for: MyApp.Order do
+  def encode(order, opts), do: Jason.Encode.map(%{id: order.id}, opts)
+end
+`
+	fm, ok := filemap.Generate(src, "encoders.ex")
+	if !ok {
+		t.Fatal("expected deterministic map")
+	}
+	if len(fm.Map) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(fm.Map))
+	}
+	if !strings.Contains(fm.Map[0].Kind, "Jason.Encoder for MyApp.User") {
+		t.Errorf("expected 'for MyApp.User' in first entry, got: %s", fm.Map[0].Kind)
+	}
+	if !strings.Contains(fm.Map[1].Kind, "Jason.Encoder for MyApp.Order") {
+		t.Errorf("expected 'for MyApp.Order' in second entry, got: %s", fm.Map[1].Kind)
+	}
+	// Labels must be distinguishable.
+	if fm.Map[0].Kind == fm.Map[1].Kind {
+		t.Errorf("two defimpl entries have identical Kind labels: %s", fm.Map[0].Kind)
 	}
 }
 

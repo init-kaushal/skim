@@ -11,9 +11,11 @@ import (
 var (
 	// elixirTopBlock matches a top-level module/protocol/implementation block.
 	// Elixir module names are dot-separated PascalCase (e.g. MyApp.Router).
-	// Groups: (1) keyword (defmodule|defprotocol|defimpl), (2) primary name.
+	// Groups: (1) keyword (defmodule|defprotocol|defimpl), (2) primary name,
+	// (3) optional for-type from "defimpl Proto, for: Type" (empty otherwise).
 	elixirTopBlock = regexp.MustCompile(
-		`^\s*(def(?:module|protocol|impl))\s+([A-Z][A-Za-z0-9_.]*)`)
+		`^\s*(def(?:module|protocol|impl))\s+([A-Z][A-Za-z0-9_.]*)` +
+			`(?:\s*,\s*for:\s*([A-Z][A-Za-z0-9_.]*))?`)
 
 	// elixirDef matches a public or private function/macro declaration at depth 1.
 	// Elixir function names may include ? (predicate) and ! (bang) suffixes.
@@ -135,9 +137,14 @@ func parseElixirFile(src, _ string) (digest.FileMap, bool) {
 		}
 
 		if m := elixirTopBlock.FindStringSubmatch(trimmed); m != nil {
+			name := m[2]
+			if m[3] != "" {
+				// defimpl Jason.Encoder, for: MyApp.User → "Jason.Encoder for MyApp.User"
+				name = m[2] + " for " + m[3]
+			}
 			b := &elixirBlock{
 				kind:      m[1],
-				name:      m[2],
+				name:      name,
 				startLine: lineNo,
 				seen:      make(map[string]bool),
 			}
