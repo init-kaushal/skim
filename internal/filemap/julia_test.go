@@ -504,6 +504,59 @@ function my_fn() end
 	}
 }
 
+// TestGenerate_Julia_CommandLiteral: keywords inside a backtick command
+// literal must not affect block depth (regression for inBacktick omission).
+func TestGenerate_Julia_CommandLiteral(t *testing.T) {
+	src := `
+function run_command()
+    cmd = ` + "`" + `if command_exists` + "`" + `
+    run(cmd)
+end
+
+function later()
+    return 42
+end
+`
+	fm, ok := Generate(src, "cmds.jl")
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	kind := fm.Map[0].Kind
+	if !strings.Contains(kind, "run_command") {
+		t.Errorf("kind %q missing 'run_command'", kind)
+	}
+	if !strings.Contains(kind, "later") {
+		t.Errorf("kind %q missing 'later' — command literal corrupted block depth", kind)
+	}
+}
+
+// TestGenerate_Julia_PrimitiveType: primitive type declarations captured.
+func TestGenerate_Julia_PrimitiveType(t *testing.T) {
+	src := `
+primitive type MyBits16 16 end
+
+primitive type MyBits32 <: AbstractFloat 32 end
+
+function use_prim(x::MyBits16)
+    return x
+end
+`
+	fm, ok := Generate(src, "primitive.jl")
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	kind := fm.Map[0].Kind
+	if !strings.Contains(kind, "MyBits16") {
+		t.Errorf("kind %q missing 'MyBits16'", kind)
+	}
+	if !strings.Contains(kind, "MyBits32") {
+		t.Errorf("kind %q missing 'MyBits32'", kind)
+	}
+	if !strings.Contains(kind, "use_prim") {
+		t.Errorf("kind %q missing 'use_prim'", kind)
+	}
+}
+
 // TestGenerate_Julia_FallsThrough_Empty: empty file falls through.
 func TestGenerate_Julia_FallsThrough_Empty(t *testing.T) {
 	_, ok := Generate("", "empty.jl")
