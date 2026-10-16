@@ -377,6 +377,33 @@ distance p1 p2 = undefined
 	}
 }
 
+// TestGenerate_Haskell_NestedBlockComment: a type declaration inside a nested
+// block comment must not appear in the map. A -} from the inner comment
+// should not close the outer one.
+func TestGenerate_Haskell_NestedBlockComment(t *testing.T) {
+	src := `{-
+  Outer comment
+  {- nested comment -}
+data Fake = Fake
+-}
+
+module Real where
+
+data User = User
+`
+	fm, ok := Generate(src, "nested.hs")
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	kind := fm.Map[0].Kind
+	if strings.Contains(kind, "Fake") {
+		t.Errorf("kind %q should not contain 'Fake' from inside nested block comment", kind)
+	}
+	if !strings.Contains(kind, "User") {
+		t.Errorf("kind %q missing 'User'", kind)
+	}
+}
+
 // TestGenerate_Haskell_FallsThrough_Empty: empty file falls through.
 func TestGenerate_Haskell_FallsThrough_Empty(t *testing.T) {
 	_, ok := Generate("", "empty.hs")

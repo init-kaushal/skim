@@ -63,7 +63,10 @@ func parseHaskellFile(src, filePath string) (digest.FileMap, bool) {
 	var fns []string   // top-level function names from type signatures
 	seenTypes := make(map[string]bool)
 	seenFns := make(map[string]bool)
-	inBlockComment := false
+	// blockCommentDepth tracks nesting of Haskell block comments {- ... -}.
+	// Haskell allows arbitrary nesting, so a boolean is insufficient:
+	// the inner -} in {- {- nested -} still-outer -} must not end the comment.
+	blockCommentDepth := 0
 
 	for _, raw := range lines {
 		trimmed := strings.TrimSpace(raw)
@@ -71,18 +74,11 @@ func parseHaskellFile(src, filePath string) (digest.FileMap, bool) {
 			continue
 		}
 
-		// Block comment {- ... -} (may span lines).
-		if inBlockComment {
-			if idx := strings.Index(trimmed, "-}"); idx >= 0 {
-				inBlockComment = false
-			}
-			continue
-		}
-		// Opening {-  but not a pragma {-#.
-		if strings.HasPrefix(trimmed, "{-") && !strings.HasPrefix(trimmed, "{-#") {
-			if !strings.Contains(trimmed, "-}") {
-				inBlockComment = true
-			}
+		// Update block comment depth before processing this line.
+		// If the line starts inside a comment it is skipped entirely.
+		depthAtStart := blockCommentDepth
+		blockCommentDepth = updateHaskellBlockCommentDepth(raw, blockCommentDepth)
+		if depthAtStart > 0 {
 			continue
 		}
 
@@ -214,6 +210,51 @@ func haskellFnNamesFromSig(raw string) []string {
 		}
 	}
 	return names
+}
+
+// updateHaskellBlockCommentDepth scans line and returns the updated block
+// comment nesting depth. At depth 0, "{-" (not "{-#") increments depth and
+// "--" stops scanning (line comment). At depth > 0, "{-" increments and "-}"
+// decrements depth (any "{-", including "{-#", can open a nested level since
+// pragmas inside a comment are just text).
+func updateHaskellBlockCommentDepth(line string, depth int) int {
+	for i := 0; i < len(line); i++ {
+		ch := line[i]
+		next := byte(0)
+		if i+1 < len(line) {
+			next = line[i+1]
+		}
+
+		if depth > 0 {
+			// Inside a block comment: look for nested openers or the close.
+			if ch == '{' && next == '-' {
+				depth++
+				i++ // skip '-'
+			} else if ch == '-' && next == '}' {
+				depth--
+				i++ // skip '}'
+			}
+		} else {
+			// Outside any block comment.
+			if ch == '{' && next == '-' {
+				after := byte(0)
+				if i+2 < len(line) {
+					after = line[i+2]
+				}
+				if after == '#' {
+					// {-# pragma — not a block comment; skip past "-"
+					i++
+					continue
+				}
+				depth++
+				i++ // skip '-'
+			} else if ch == '-' && next == '-' {
+				// Line comment — rest of line is commented out.
+				break
+			}
+		}
+	}
+	return depth
 }
 
 func isHaskellKeyword(s string) bool {
