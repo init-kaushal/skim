@@ -29,6 +29,7 @@
 //   - .dart                        — class/mixin/enum/extension with method lists; Dart 3 modifiers
 //   - .ex/.exs                      — defmodule/defprotocol/defimpl with def/defp lists; do...end depth
 //   - .lua                          — top-level function names; file treated as one module entry
+//   - .hs                           — module/data/newtype/type/class with top-level function signatures
 //
 // All other extensions fall through to the worker path.
 package filemap
@@ -262,6 +263,13 @@ func Generate(src, filePath string) (digest.FileMap, bool) {
 
 	case ".lua":
 		fm, ok := parseLuaFile(src, filePath)
+		if !ok {
+			return digest.FileMap{}, false
+		}
+		return fm, true
+
+	case ".hs":
+		fm, ok := parseHaskellFile(src, filePath)
 		if !ok {
 			return digest.FileMap{}, false
 		}
