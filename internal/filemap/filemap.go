@@ -32,6 +32,7 @@
 //   - .hs                           — module/data/newtype/type/class with top-level function signatures
 //   - .r/.R                         — top-level function/class definitions; combined brace+paren depth
 //   - .ml/.mli                      — let/type/module/class; val sigs in interfaces; nestable (* *) comments
+//   - .jl                           — function/struct/module/macro/const; end-keyword depth + bracket tracking
 //
 // All other extensions fall through to the worker path.
 package filemap
@@ -286,6 +287,13 @@ func Generate(src, filePath string) (digest.FileMap, bool) {
 
 	case ".ml", ".mli":
 		fm, ok := parseOCamlFile(src, filePath)
+		if !ok {
+			return digest.FileMap{}, false
+		}
+		return fm, true
+
+	case ".jl":
+		fm, ok := parseJuliaFile(src, filePath)
 		if !ok {
 			return digest.FileMap{}, false
 		}
