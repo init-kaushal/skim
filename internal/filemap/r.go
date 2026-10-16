@@ -250,7 +250,8 @@ func hasRStructure(lines []string) bool {
 	for _, l := range lines {
 		if rFuncAssign.MatchString(l) ||
 			rSetClass.MatchString(l) ||
-			rR6Class.MatchString(l) {
+			rR6Class.MatchString(l) ||
+			rSetGeneric.MatchString(l) {
 			return true
 		}
 	}

@@ -355,6 +355,22 @@ my_func <- function(x) x
 	}
 }
 
+// TestGenerate_R_SetGenericOnly: a file containing only a setGeneric()
+// declaration must activate the parser (hasRStructure was missing rSetGeneric).
+func TestGenerate_R_SetGenericOnly(t *testing.T) {
+	src := `setGeneric("transformData",
+           function(x, ...) standardGeneric("transformData"))
+`
+	fm, ok := Generate(src, "generics.R")
+	if !ok {
+		t.Fatal("expected ok=true — setGeneric-only file must activate parser")
+	}
+	kind := fm.Map[0].Kind
+	if !strings.Contains(kind, "transformData") {
+		t.Errorf("kind %q missing 'transformData'", kind)
+	}
+}
+
 // TestGenerate_R_FallsThrough_Empty: empty file falls through.
 func TestGenerate_R_FallsThrough_Empty(t *testing.T) {
 	_, ok := Generate("", "empty.R")
