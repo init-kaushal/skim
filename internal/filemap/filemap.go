@@ -31,6 +31,7 @@
 //   - .lua                          — top-level function names; file treated as one module entry
 //   - .hs                           — module/data/newtype/type/class with top-level function signatures
 //   - .r/.R                         — top-level function/class definitions; combined brace+paren depth
+//   - .ml/.mli                      — let/type/module/class; val sigs in interfaces; nestable (* *) comments
 //
 // All other extensions fall through to the worker path.
 package filemap
@@ -278,6 +279,13 @@ func Generate(src, filePath string) (digest.FileMap, bool) {
 
 	case ".r", ".R":
 		fm, ok := parseRFile(src, filePath)
+		if !ok {
+			return digest.FileMap{}, false
+		}
+		return fm, true
+
+	case ".ml", ".mli":
+		fm, ok := parseOCamlFile(src, filePath)
 		if !ok {
 			return digest.FileMap{}, false
 		}
