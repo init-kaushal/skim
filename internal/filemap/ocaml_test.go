@@ -353,6 +353,22 @@ let my_fn x = x
 	}
 }
 
+// TestGenerate_OCaml_ExceptionOnly: a file containing only an exception
+// declaration must activate the parser (hasOCamlStructure was missing
+// ocamlException).
+func TestGenerate_OCaml_ExceptionOnly(t *testing.T) {
+	src := `exception Invalid_input of string
+`
+	fm, ok := Generate(src, "errors.ml")
+	if !ok {
+		t.Fatal("expected ok=true — exception-only file must activate parser")
+	}
+	kind := fm.Map[0].Kind
+	if !strings.Contains(kind, "Invalid_input") {
+		t.Errorf("kind %q missing 'Invalid_input'", kind)
+	}
+}
+
 // TestGenerate_OCaml_FallsThrough_Empty: empty file falls through.
 func TestGenerate_OCaml_FallsThrough_Empty(t *testing.T) {
 	_, ok := Generate("", "empty.ml")

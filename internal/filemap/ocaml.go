@@ -291,7 +291,8 @@ func hasOCamlStructure(lines []string) bool {
 			ocamlType.MatchString(l) ||
 			ocamlModule.MatchString(l) ||
 			ocamlClass.MatchString(l) ||
-			ocamlVal.MatchString(l) {
+			ocamlVal.MatchString(l) ||
+			ocamlException.MatchString(l) {
 			return true
 		}
 	}
