@@ -1,6 +1,6 @@
 # skim v2 — Architecture & Roadmap
 
-**Status:** Phase 1 merged to `v0.2-phase1` (current)  
+**Status:** Phase 1 (cost routing) and Phase 2 (filemap) merged to `main`  
 **Repo:** https://github.com/init-kaushal/skim
 
 ---
@@ -145,15 +145,19 @@ LLM worker is invoked.
 
 ---
 
-## Phase 2 (next): Semantic repository index
+## Phase 2 (done): Deterministic file maps
 
-Goals:
-- `skim index` — builds an AST-based symbol map (Go: `go/ast`, TS: tree-sitter)
-- Lets the expensive model locate code without grepping hundreds of files
-- File maps: compact per-file representations (purpose, symbols, line ranges)
-- Context state tracker: tracks session goals, decisions, relevant files
+Goals were:
+- `internal/filemap/` — compact per-file structural digests (purpose, symbols, line ranges)
+- No LLM call needed for structured source files; pure regex/AST scan
+- Lets the expensive model locate code without grepping; avoids paying Haiku for what a parser can do free
 
-New packages: `internal/index/`, `internal/filemap/`, `internal/context/`
+**Delivered:** `filemap.Generate(src, filePath)` covers 32 languages and formats —
+Go (via `go/ast`), TypeScript/JS, Python, Rust, JSON, YAML, TOML, Dockerfile,
+Makefile, Shell, HCL/Terraform, Protobuf, SQL, GraphQL, Ruby, Kotlin, Java,
+Swift, C#, C/C++, Scala, PHP, Dart, Elixir, Lua, Haskell, R, OCaml, Julia,
+Clojure, F#, Erlang, Zig. All other extensions fall through to the CHEAP_WORKER
+path. 719 tests, zero external dependencies.
 
 ## Phase 3: Model routing & escalation
 
@@ -190,5 +194,5 @@ These never change regardless of optimization decisions:
 
 ---
 
-*skim v2 architecture — written 2026-10-05*  
-*Current: v0.1.4 (main) · Phase 1: v0.2-phase1*
+*skim v2 architecture — written 2026-10-05, updated 2026-10-19*  
+*Phase 1 (cost routing) + Phase 2 (filemap, 32 languages) merged to main*

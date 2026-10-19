@@ -16,13 +16,15 @@ digest — so the main session's context (and token bill, and 5-hour/weekly
 usage limits) isn't spent absorbing raw file dumps, grep floods, and command
 output that get re-sent on every subsequent turn.
 
-> **Status:** v1 complete and merged to `main`. All 15 planned tasks are
-> implemented and reviewed, followed by four post-implementation fix waves
-> (see the handoff notes for the full ledger). Every fix wave has had either
-> an independent review pass or a direct empirical check against a real built
-> binary. Picking this up fresh? Read
-> [`docs/superpowers/notes/2026-09-14-handoff.md`](docs/superpowers/notes/2026-09-14-handoff.md)
-> first — it has the full history and every deferred follow-up.
+> **Status:** Complete. v1 (core routing + hooks) and Phase 2 (deterministic
+> filemap tier, 32 languages) are merged to `main`. The deterministic tier
+> handles structured source files without a worker call — Go, Python, Rust,
+> TypeScript, Java, Kotlin, Swift, C#, C/C++, Rust, Ruby, PHP, Scala, Dart,
+> Elixir, Lua, Haskell, R, OCaml, Julia, Clojure, F#, Erlang, Zig, and the
+> common config/infra formats (JSON, YAML, TOML, HCL, Protobuf, SQL,
+> GraphQL, Dockerfile, Makefile, Shell). Unsupported extensions fall through
+> to Haiku. For full history, see
+> [`docs/superpowers/notes/2026-09-14-handoff.md`](docs/superpowers/notes/2026-09-14-handoff.md).
 
 ## What it does
 
