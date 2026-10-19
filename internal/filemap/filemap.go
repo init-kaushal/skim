@@ -36,6 +36,7 @@
 //   - .clj/.cljs/.cljc              — defn/defprotocol/defrecord/deftype/def; paren-depth tracking
 //   - .fs/.fsx/.fsi                 — module/namespace/type/let bindings; val sigs in .fsi; nestable (* *) comments
 //   - .erl/.hrl                     — -module/-record/-type attributes; function clauses; -define macros in headers
+//   - .zig                          — fn/pub fn declarations; const Type = struct/union/enum/opaque; column-0 rule
 //
 // All other extensions fall through to the worker path.
 package filemap
@@ -318,6 +319,13 @@ func Generate(src, filePath string) (digest.FileMap, bool) {
 
 	case ".erl", ".hrl":
 		fm, ok := parseErlangFile(src, filePath)
+		if !ok {
+			return digest.FileMap{}, false
+		}
+		return fm, true
+
+	case ".zig":
+		fm, ok := parseZigFile(src, filePath)
 		if !ok {
 			return digest.FileMap{}, false
 		}
