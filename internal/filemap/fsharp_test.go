@@ -331,6 +331,68 @@ let stub x = x
 	}
 }
 
+// TestGenerate_FSharp_TripleStringIgnored: declarations inside a triple-quoted
+// string must not appear in the map; real declarations after the string must.
+//
+// Regression for the missing triple-string state tracking. Without the fix,
+// `let fakeFunction` and `type FakeType` (both at column 0 inside """) are
+// matched by the declaration regexes and collected incorrectly.
+func TestGenerate_FSharp_TripleStringIgnored(t *testing.T) {
+	src := `module Example
+
+let documentation = """
+let fakeFunction = 42
+type FakeType = { X: int }
+"""
+
+let realFunction = 1
+`
+	fm, ok := Generate(src, "Example.fs")
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	for _, sym := range fm.Symbols {
+		if strings.Contains(sym, "fakeFunction") {
+			t.Errorf("symbols %v must not contain fakeFunction (inside triple string)", fm.Symbols)
+		}
+		if strings.Contains(sym, "FakeType") {
+			t.Errorf("symbols %v must not contain FakeType (inside triple string)", fm.Symbols)
+		}
+	}
+	found := false
+	for _, sym := range fm.Symbols {
+		if sym == "fn realFunction" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("symbols %v must contain fn realFunction (after triple string)", fm.Symbols)
+	}
+}
+
+// TestGenerate_FSharp_TripleStringSameLine: opening and closing """ on the
+// same line (even count) should not change string state.
+func TestGenerate_FSharp_TripleStringSameLine(t *testing.T) {
+	src := `module Inline
+
+let x = """hello"""
+let y = 2
+`
+	fm, ok := Generate(src, "inline.fs")
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	found := false
+	for _, sym := range fm.Symbols {
+		if sym == "fn y" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("symbols %v missing fn y — single-line triple string incorrectly left state open", fm.Symbols)
+	}
+}
+
 // TestGenerate_FSharp_FallsThrough_Empty: empty file falls through.
 func TestGenerate_FSharp_FallsThrough_Empty(t *testing.T) {
 	_, ok := Generate("", "empty.fs")

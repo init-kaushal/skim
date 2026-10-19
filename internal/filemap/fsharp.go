@@ -82,6 +82,7 @@ func parseFSharpFile(src, filePath string) (digest.FileMap, bool) {
 	seenStructural := make(map[string]bool)
 	seenDefs := make(map[string]bool)
 	commentDepth := 0
+	inTripleString := false
 
 	for _, raw := range lines {
 		trimmed := strings.TrimSpace(raw)
@@ -96,9 +97,24 @@ func parseFSharpFile(src, filePath string) (digest.FileMap, bool) {
 			continue
 		}
 
+		// Inside a triple-quoted string """...""": skip collection but track
+		// every line for the closing delimiter. An odd number of """ on a line
+		// toggles the state (open → closed or vice versa).
+		if inTripleString {
+			if countFSharpTripleQuotes(raw)%2 == 1 {
+				inTripleString = false
+			}
+			continue
+		}
+
 		// Skip lines that are indented (inside type bodies, function bodies,
 		// or explicit module blocks). Top-level declarations start at column 0.
+		// Still update triple-string state: an indented line can open a string
+		// whose content spans to column-0 lines below.
 		if len(raw) > 0 && (raw[0] == ' ' || raw[0] == '\t') {
+			if countFSharpTripleQuotes(raw)%2 == 1 {
+				inTripleString = true
+			}
 			continue
 		}
 
@@ -112,6 +128,9 @@ func parseFSharpFile(src, filePath string) (digest.FileMap, bool) {
 			if moduleName == "" {
 				moduleName = m[1]
 			}
+			if countFSharpTripleQuotes(raw)%2 == 1 {
+				inTripleString = true
+			}
 			continue
 		}
 
@@ -119,6 +138,9 @@ func parseFSharpFile(src, filePath string) (digest.FileMap, bool) {
 		if m := fsharpNamespace.FindStringSubmatch(trimmed); m != nil {
 			if moduleName == "" {
 				moduleName = m[1]
+			}
+			if countFSharpTripleQuotes(raw)%2 == 1 {
+				inTripleString = true
 			}
 			continue
 		}
@@ -129,6 +151,9 @@ func parseFSharpFile(src, filePath string) (digest.FileMap, bool) {
 			if !isFSharpKeyword(name) && !seenStructural[name] {
 				structural = append(structural, name)
 				seenStructural[name] = true
+			}
+			if countFSharpTripleQuotes(raw)%2 == 1 {
+				inTripleString = true
 			}
 			continue
 		}
@@ -151,6 +176,10 @@ func parseFSharpFile(src, filePath string) (digest.FileMap, bool) {
 					seenDefs[name] = true
 				}
 			}
+		}
+		// Update triple-string state after a let/val line (e.g. let x = """...).
+		if countFSharpTripleQuotes(raw)%2 == 1 {
+			inTripleString = true
 		}
 	}
 
@@ -222,6 +251,21 @@ func updateFSharpBlockCommentDepth(line string, depth int) int {
 		}
 	}
 	return depth
+}
+
+// countFSharpTripleQuotes counts non-overlapping """ occurrences in line.
+// An odd count means the triple-string state toggles on this line.
+func countFSharpTripleQuotes(line string) int {
+	count := 0
+	for i := 0; i+2 < len(line); {
+		if line[i] == '"' && line[i+1] == '"' && line[i+2] == '"' {
+			count++
+			i += 3
+		} else {
+			i++
+		}
+	}
+	return count
 }
 
 func isFSharpKeyword(s string) bool {
