@@ -315,6 +315,59 @@ pub fn stub() void {}
 	}
 }
 
+// TestGenerate_Zig_IndentedTopLevel: a top-level declaration that happens to
+// be indented (unconventional but valid Zig) must still be collected.
+//
+// Regression for the old column-0 skip rule: it caused an inconsistency
+// where hasZigStructure (which trims whitespace) would accept the file but
+// the collection loop would then skip the declaration and fall through.
+func TestGenerate_Zig_IndentedTopLevel(t *testing.T) {
+	src := "    pub fn calculate() u32 {\n" +
+		"        return 42;\n" +
+		"    }\n"
+	fm, ok := Generate(src, "calc.zig")
+	if !ok {
+		t.Fatal("expected ok=true — indented top-level fn must be collected at brace depth 0")
+	}
+	found := false
+	for _, s := range fm.Symbols {
+		if s == "fn calculate" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("symbols %v missing 'fn calculate' (indented top-level fn)", fm.Symbols)
+	}
+}
+
+// TestGenerate_Zig_StringWithBraces: braces inside string literals must not
+// affect brace depth, so declarations after a string-with-braces are collected.
+func TestGenerate_Zig_StringWithBraces(t *testing.T) {
+	src := `const std = @import("std");
+
+pub fn greeting() []const u8 {
+    return "Hello, {world}!";
+}
+
+pub fn farewell() []const u8 {
+    return "Goodbye, {friend}!";
+}
+`
+	fm, ok := Generate(src, "strings.zig")
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	hasFarewell := false
+	for _, s := range fm.Symbols {
+		if s == "fn farewell" {
+			hasFarewell = true
+		}
+	}
+	if !hasFarewell {
+		t.Errorf("symbols %v missing 'fn farewell' — braces inside strings affected depth", fm.Symbols)
+	}
+}
+
 // TestGenerate_Zig_FallsThrough_Empty: empty file falls through.
 func TestGenerate_Zig_FallsThrough_Empty(t *testing.T) {
 	_, ok := Generate("", "empty.zig")

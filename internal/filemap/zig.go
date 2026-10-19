@@ -31,12 +31,12 @@ var (
 
 // parseZigFile builds a FileMap for a Zig source file.
 //
-// Zig uses only // single-line comments and {/} braces for scoping. All
-// top-level declarations start at column 0; struct fields, methods, and local
-// variables are indented inside their enclosing braces and are skipped by the
-// column-0 rule.
+// Zig uses only // single-line comments and {/} braces for scoping. Indentation
+// is a formatting convention, not a language-level scope delimiter. The parser
+// tracks brace depth (ignoring braces inside strings and // comments) and
+// collects declarations found at depth 0 (depth-before-update rule).
 //
-// Collected at column 0:
+// Collected at brace depth 0:
 //   - (pub)? (export|extern)? (inline|noinline)? fn name(...) — functions
 //   - (pub)? const TypeName = (packed|extern)? struct/union/enum/opaque — types
 //
@@ -64,37 +64,39 @@ func parseZigFile(src, filePath string) (digest.FileMap, bool) {
 	var defs []string       // function names
 	seenStructural := make(map[string]bool)
 	seenDefs := make(map[string]bool)
+	braceDepth := 0
+	inString := false
 
 	for _, raw := range lines {
 		trimmed := strings.TrimSpace(raw)
-		if trimmed == "" || strings.HasPrefix(trimmed, "//") {
+		if trimmed == "" {
 			continue
 		}
 
-		// All top-level declarations in Zig start at column 0. Struct fields,
-		// methods, and local variables are indented and skipped here.
-		if len(raw) > 0 && (raw[0] == ' ' || raw[0] == '\t') {
-			continue
-		}
-
-		// Type declaration: (pub)? const TypeName = struct/union/enum/opaque
-		if m := zigType.FindStringSubmatch(trimmed); m != nil {
-			name := m[1]
-			if !seenStructural[name] {
-				structural = append(structural, name)
-				seenStructural[name] = true
+		// Collect declarations at brace depth 0 (depth-before-update).
+		// Using trimmed so the regexes (anchored with ^) work regardless of
+		// how the source is indented.
+		if braceDepth == 0 && !strings.HasPrefix(trimmed, "//") {
+			if m := zigType.FindStringSubmatch(trimmed); m != nil {
+				name := m[1]
+				if !seenStructural[name] {
+					structural = append(structural, name)
+					seenStructural[name] = true
+				}
+			} else if m := zigFunc.FindStringSubmatch(trimmed); m != nil {
+				name := m[1]
+				if !isZigKeyword(name) && !seenDefs[name] {
+					defs = append(defs, name)
+					seenDefs[name] = true
+				}
 			}
-			continue
 		}
 
-		// Function declaration: (pub)? (export|extern)? (inline|noinline)? fn name
-		if m := zigFunc.FindStringSubmatch(trimmed); m != nil {
-			name := m[1]
-			if !isZigKeyword(name) && !seenDefs[name] {
-				defs = append(defs, name)
-				seenDefs[name] = true
-			}
-			continue
+		// Update brace depth for this line; braces inside strings and // line
+		// comments are excluded from counting.
+		braceDepth += zigLineBraceDepth(raw, &inString)
+		if braceDepth < 0 {
+			braceDepth = 0
 		}
 	}
 
@@ -125,6 +127,52 @@ func parseZigFile(src, filePath string) (digest.FileMap, bool) {
 		}},
 		Symbols: symbols,
 	}, true
+}
+
+// zigLineBraceDepth returns the net change in brace depth for line, counting
+// only '{' and '}' outside of string literals and // line comments.
+//
+// Zig multiline string lines (content starting with \\ after optional
+// whitespace) are treated as pure string data — they contribute no net change.
+// The inString pointer carries string-open state across lines for cases where
+// a "..." literal straddles a line boundary (impossible in Zig syntax, but
+// guarded defensively).
+func zigLineBraceDepth(line string, inString *bool) int {
+	// Detect Zig multiline string literal lines (\\...): entire line is data.
+	i := 0
+	n := len(line)
+	for i < n && (line[i] == ' ' || line[i] == '\t') {
+		i++
+	}
+	if i+1 < n && line[i] == '\\' && line[i+1] == '\\' {
+		return 0
+	}
+
+	net := 0
+	for i = 0; i < n; i++ {
+		ch := line[i]
+		if *inString {
+			if ch == '\\' && i+1 < n {
+				i++ // skip escape sequence
+			} else if ch == '"' {
+				*inString = false
+			}
+			continue
+		}
+		switch ch {
+		case '/':
+			if i+1 < n && line[i+1] == '/' {
+				return net // rest of line is a comment
+			}
+		case '"':
+			*inString = true
+		case '{':
+			net++
+		case '}':
+			net--
+		}
+	}
+	return net
 }
 
 func isZigKeyword(s string) bool {
