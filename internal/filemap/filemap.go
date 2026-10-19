@@ -33,6 +33,7 @@
 //   - .r/.R                         — top-level function/class definitions; combined brace+paren depth
 //   - .ml/.mli                      — let/type/module/class; val sigs in interfaces; nestable (* *) comments
 //   - .jl                           — function/struct/module/macro/const; end-keyword depth + bracket tracking
+//   - .clj/.cljs/.cljc              — defn/defprotocol/defrecord/deftype/def; paren-depth tracking
 //
 // All other extensions fall through to the worker path.
 package filemap
@@ -294,6 +295,13 @@ func Generate(src, filePath string) (digest.FileMap, bool) {
 
 	case ".jl":
 		fm, ok := parseJuliaFile(src, filePath)
+		if !ok {
+			return digest.FileMap{}, false
+		}
+		return fm, true
+
+	case ".clj", ".cljs", ".cljc":
+		fm, ok := parseClojureFile(src, filePath)
 		if !ok {
 			return digest.FileMap{}, false
 		}
