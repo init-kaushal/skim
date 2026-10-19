@@ -34,6 +34,7 @@
 //   - .ml/.mli                      — let/type/module/class; val sigs in interfaces; nestable (* *) comments
 //   - .jl                           — function/struct/module/macro/const; end-keyword depth + bracket tracking
 //   - .clj/.cljs/.cljc              — defn/defprotocol/defrecord/deftype/def; paren-depth tracking
+//   - .fs/.fsx/.fsi                 — module/namespace/type/let bindings; val sigs in .fsi; nestable (* *) comments
 //
 // All other extensions fall through to the worker path.
 package filemap
@@ -302,6 +303,13 @@ func Generate(src, filePath string) (digest.FileMap, bool) {
 
 	case ".clj", ".cljs", ".cljc":
 		fm, ok := parseClojureFile(src, filePath)
+		if !ok {
+			return digest.FileMap{}, false
+		}
+		return fm, true
+
+	case ".fs", ".fsx", ".fsi":
+		fm, ok := parseFSharpFile(src, filePath)
 		if !ok {
 			return digest.FileMap{}, false
 		}
