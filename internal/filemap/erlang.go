@@ -72,13 +72,12 @@ func parseErlangFile(src, filePath string) (digest.FileMap, bool) {
 	}
 
 	var moduleName string
-	var structural []string // records and types
-	var defs []string       // functions (.erl) or macros (.hrl)
-	seenStructural := make(map[string]bool)
+	var records []string // from -record(...)
+	var types []string   // from -type/opaque
+	var defs []string    // functions (.erl) or macros (.hrl); fns stored as "name/arity"
+	seenRecords := make(map[string]bool)
+	seenTypes := make(map[string]bool)
 	seenDefs := make(map[string]bool)
-	// structuralKind tracks whether a structural entry is a record or type,
-	// so we can emit the correct symbol prefix.
-	structuralKind := make(map[string]string)
 
 	for _, raw := range lines {
 		trimmed := strings.TrimSpace(raw)
@@ -101,19 +100,17 @@ func parseErlangFile(src, filePath string) (digest.FileMap, bool) {
 			}
 			if m := erlangRecord.FindStringSubmatch(trimmed); m != nil {
 				name := m[1]
-				if !seenStructural[name] {
-					structural = append(structural, name)
-					seenStructural[name] = true
-					structuralKind[name] = "record"
+				if !seenRecords[name] {
+					records = append(records, name)
+					seenRecords[name] = true
 				}
 				continue
 			}
 			if m := erlangType.FindStringSubmatch(trimmed); m != nil {
 				name := m[1]
-				if !seenStructural[name] {
-					structural = append(structural, name)
-					seenStructural[name] = true
-					structuralKind[name] = "type"
+				if !seenTypes[name] {
+					types = append(types, name)
+					seenTypes[name] = true
 				}
 				continue
 			}
@@ -133,17 +130,19 @@ func parseErlangFile(src, filePath string) (digest.FileMap, bool) {
 
 		if !isHeader {
 			// Function clause: name(Args) -> ...
-			// Multiple clauses of the same function dedup via seenDefs.
-			if m := erlangFunc.FindStringSubmatch(trimmed); m != nil {
-				name := m[1]
-				if !seenDefs[name] {
-					defs = append(defs, name)
-					seenDefs[name] = true
+			// Erlang identifies functions by (name, arity), so format/1 and
+			// format/2 are distinct. Deduplicate by "name/arity".
+			if name, arity, ok := erlangFuncArity(raw); ok {
+				key := fmt.Sprintf("%s/%d", name, arity)
+				if !seenDefs[key] {
+					defs = append(defs, key)
+					seenDefs[key] = true
 				}
 			}
 		}
 	}
 
+	structural := append(records, types...)
 	if moduleName == "" && len(structural) == 0 && len(defs) == 0 {
 		return digest.FileMap{}, false
 	}
@@ -156,17 +155,19 @@ func parseErlangFile(src, filePath string) (digest.FileMap, bool) {
 		labelBase = moduleName
 	}
 
-	combined := append(structural, defs...)
+	// For the label, show structural names (no arity suffix) then defs (with arity).
+	structuralNames := make([]string, len(structural))
+	copy(structuralNames, structural)
+	combined := append(structuralNames, defs...)
 	label := erlangLabel(labelBase, combined)
 	summary := erlangSummary(labelBase, len(structural), len(defs), isHeader, generated)
 
 	var symbols []string
-	for _, s := range structural {
-		kind := structuralKind[s]
-		if kind == "" {
-			kind = "type"
-		}
-		symbols = append(symbols, kind+" "+s)
+	for _, r := range records {
+		symbols = append(symbols, "record "+r)
+	}
+	for _, t := range types {
+		symbols = append(symbols, "type "+t)
 	}
 	for _, d := range defs {
 		if isHeader {
@@ -184,6 +185,99 @@ func parseErlangFile(src, filePath string) (digest.FileMap, bool) {
 		}},
 		Symbols: symbols,
 	}, true
+}
+
+// erlangFuncArity parses a function clause line and returns the function name
+// and arity. It counts top-level (depth-1) commas inside the argument list,
+// handling nested parens/brackets/braces and quoted strings/atoms. For
+// multi-line heads where ')' is not on the first line, commas seen so far +1
+// is used as a best-effort estimate.
+func erlangFuncArity(raw string) (name string, arity int, ok bool) {
+	m := erlangFunc.FindStringSubmatchIndex(raw)
+	if m == nil {
+		return "", 0, false
+	}
+	name = raw[m[2]:m[3]]
+
+	// Find '(' — guaranteed by the regex but may have whitespace before it.
+	i := m[3]
+	for i < len(raw) && raw[i] != '(' {
+		i++
+	}
+	if i >= len(raw) {
+		return name, 0, true
+	}
+	i++ // past '('
+
+	depth := 1
+	commas := 0
+	hasContent := false
+
+	for i < len(raw) {
+		ch := raw[i]
+		switch ch {
+		case '"': // double-quoted string
+			i++
+			for i < len(raw) {
+				if raw[i] == '\\' && i+1 < len(raw) {
+					i += 2
+					continue
+				}
+				if raw[i] == '"' {
+					break
+				}
+				i++
+			}
+			hasContent = true
+		case '\'': // single-quoted atom
+			i++
+			for i < len(raw) {
+				if raw[i] == '\\' && i+1 < len(raw) {
+					i += 2
+					continue
+				}
+				if raw[i] == '\'' {
+					break
+				}
+				i++
+			}
+			hasContent = true
+		case '(', '[', '{':
+			depth++
+			hasContent = true
+		case ')', ']', '}':
+			depth--
+			if depth == 0 {
+				arity = 0
+				if commas > 0 || hasContent {
+					arity = commas + 1
+				}
+				return name, arity, true
+			}
+		case ',':
+			if depth == 1 {
+				commas++
+			}
+			hasContent = true
+		case '%': // line comment: stop here
+			arity = 0
+			if commas > 0 || hasContent {
+				arity = commas + 1
+			}
+			return name, arity, true
+		case ' ', '\t':
+			// skip whitespace
+		default:
+			hasContent = true
+		}
+		i++
+	}
+	// End of line without finding ')' — best-effort for multi-line heads.
+	arity = 0
+	if commas > 0 || hasContent {
+		arity = commas + 1
+	}
+	return name, arity, true
 }
 
 func hasErlangStructure(lines []string) bool {

@@ -52,16 +52,16 @@ terminate(_Reason, _State) ->
 	if !strings.Contains(kind, "start_link") {
 		t.Errorf("kind %q missing start_link", kind)
 	}
-	// Multiple clauses of the same function should appear only once (across
-	// all symbols, not just the truncated kind label).
+	// Multiple clauses of the same (name, arity) should appear only once.
+	// handle_call/3 has two clauses but is one function.
 	count := 0
 	for _, s := range fm.Symbols {
-		if s == "fn handle_call" {
+		if s == "fn handle_call/3" {
 			count++
 		}
 	}
 	if count != 1 {
-		t.Errorf("fn handle_call should appear once in symbols, got %d in %v", count, fm.Symbols)
+		t.Errorf("fn handle_call/3 should appear once in symbols, got %d in %v", count, fm.Symbols)
 	}
 	// Symbols must include record prefix.
 	hasRecordState := false
@@ -131,12 +131,12 @@ real_fn(X) -> X.
 	}
 	found := false
 	for _, s := range fm.Symbols {
-		if s == "fn real_fn" {
+		if s == "fn real_fn/1" {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("symbols %v missing 'fn real_fn'", fm.Symbols)
+		t.Errorf("symbols %v missing 'fn real_fn/1'", fm.Symbols)
 	}
 }
 
@@ -167,12 +167,12 @@ identity(X) -> X.
 	}
 	classifyFound := false
 	for _, s := range fm.Symbols {
-		if s == "fn classify" {
+		if s == "fn classify/1" {
 			classifyFound = true
 		}
 	}
 	if !classifyFound {
-		t.Errorf("symbols %v missing 'fn classify'", fm.Symbols)
+		t.Errorf("symbols %v missing 'fn classify/1'", fm.Symbols)
 	}
 }
 
@@ -277,7 +277,7 @@ hello() -> world.
 	}
 }
 
-// TestGenerate_Erlang_MultiClauseDedup: same function name from multiple
+// TestGenerate_Erlang_MultiClauseDedup: same (name, arity) from multiple
 // clauses appears only once in symbols.
 func TestGenerate_Erlang_MultiClauseDedup(t *testing.T) {
 	src := `-module(dedup).
@@ -292,12 +292,85 @@ fib(N) -> fib(N-1) + fib(N-2).
 	}
 	count := 0
 	for _, s := range fm.Symbols {
-		if s == "fn fib" {
+		if s == "fn fib/1" {
 			count++
 		}
 	}
 	if count != 1 {
-		t.Errorf("fn fib should appear once, got %d in symbols %v", count, fm.Symbols)
+		t.Errorf("fn fib/1 should appear once, got %d in symbols %v", count, fm.Symbols)
+	}
+}
+
+// TestGenerate_Erlang_ArityDistinct: format/1 and format/2 are different
+// functions in Erlang and must both appear as separate symbols.
+//
+// Regression for the name-only deduplication bug: the old code collapsed
+// them into one symbol because it keyed on name alone.
+func TestGenerate_Erlang_ArityDistinct(t *testing.T) {
+	src := `-module(example).
+
+format(Value) ->
+    Value.
+
+format(Format, Value) ->
+    {Format, Value}.
+`
+	fm, ok := Generate(src, "example.erl")
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	hasArity1 := false
+	hasArity2 := false
+	for _, s := range fm.Symbols {
+		if s == "fn format/1" {
+			hasArity1 = true
+		}
+		if s == "fn format/2" {
+			hasArity2 = true
+		}
+	}
+	if !hasArity1 {
+		t.Errorf("symbols %v missing 'fn format/1'", fm.Symbols)
+	}
+	if !hasArity2 {
+		t.Errorf("symbols %v missing 'fn format/2'", fm.Symbols)
+	}
+}
+
+// TestGenerate_Erlang_RecordTypeNameConflict: a -record and a -type with the
+// same name must both appear as separate symbols.
+//
+// Regression for the shared seenStructural dedup map: the old code silently
+// dropped the second entry when a record and a type shared a name.
+func TestGenerate_Erlang_RecordTypeNameConflict(t *testing.T) {
+	src := `-module(conflict).
+
+-record(point, {x :: float(), y :: float()}).
+-type point() :: #point{}.
+
+distance(A, B) ->
+    math:sqrt(math:pow(A#point.x - B#point.x, 2) +
+              math:pow(A#point.y - B#point.y, 2)).
+`
+	fm, ok := Generate(src, "conflict.erl")
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	hasRecord := false
+	hasType := false
+	for _, s := range fm.Symbols {
+		if s == "record point" {
+			hasRecord = true
+		}
+		if s == "type point" {
+			hasType = true
+		}
+	}
+	if !hasRecord {
+		t.Errorf("symbols %v missing 'record point'", fm.Symbols)
+	}
+	if !hasType {
+		t.Errorf("symbols %v missing 'type point' (distinct from record)", fm.Symbols)
 	}
 }
 
