@@ -243,8 +243,8 @@
       <div class="row" style="margin-top:.35rem;border-top:1px dashed var(--border-strong);padding-top:.7rem">
         <span class="pill work">with skim</span>
         <span class="arrow">→</span>
-        <span class="what">hook sees the call, sizes the file, asks Haiku for a map</span>
-        <span class="cost">worker, not you</span>
+        <span class="what">hook sees the call — 32 languages parsed in-process by a structural scanner; other files sent to Haiku</span>
+        <span class="cost">free or worker</span>
       </div>
       <div class="row">
         <span class="pill deny">deny</span>
@@ -285,6 +285,14 @@
           At most 2000 lines are ever digested — the cap Claude Code's own Read
           has, since reading past it cannot save anything. A longer file says so
           and gives the offset to continue from.
+        </p>
+        <p style="margin-top:.5rem">
+          For Go, Python, TypeScript, Rust, Java, Kotlin, Swift, C#, C/C++, Ruby, PHP,
+          Scala, Dart, Elixir, Lua, Haskell, R, OCaml, Julia, Clojure, F#, Erlang, Zig,
+          and the common config formats (JSON, YAML, TOML, HCL, Protobuf, SQL, GraphQL,
+          Dockerfile, Makefile, Shell) — the digest is produced by a structural
+          scanner in-process. <strong>No worker call, no latency, no cost.</strong>
+          Unsupported extensions fall through to Haiku.
         </p>
         <span class="tag">300 lines / 60KB default</span>
       </div>
@@ -339,11 +347,12 @@
       tier.
     </p>
     <p class="muted" style="font-size:.9rem;max-width:40rem">
-      The value of what's saved scales with your session model's per-token weight:
-      highest on Opus, lowest — and genuinely negative, once worker calls are
-      counted — when the session already runs on Haiku. <code>skim stats</code>
-      settles it in dollars rather than tokens: the saving priced at your session
-      model's rate, against what the worker actually billed.
+      For the 32 structurally-parsed languages there is no worker call, so the saving
+      is always positive regardless of session model. For other files, value scales with
+      your session model's per-token weight: highest on Opus, and potentially negative
+      on a Haiku session once worker calls are counted. <code>skim stats</code>
+      settles it in dollars: the saving priced at your session model's rate, against
+      what the worker actually billed.
     </p>
   </div>
 </section>
@@ -485,7 +494,7 @@ claude plugin install skim@skim</pre>
       </div>
       <div class="lim">
         <h3>Approximate line numbers</h3>
-        <p>File-map line ranges come from a Haiku pass over the content, not an exact parse — nominally ±3 lines. When you need precision, <code>Read</code> with <code>offset</code>/<code>limit</code>, or <code>skim cat</code>.</p>
+        <p>For the 32 languages with a structural scanner, line ranges come from the actual parse and are exact. For everything else — files sent to Haiku — ranges are nominally ±3 lines. When you need precision on an unsupported file type, <code>Read</code> with <code>offset</code>/<code>limit</code>, or <code>skim cat</code>.</p>
       </div>
       <div class="lim">
         <h3>Bash permission matching shifts</h3>
@@ -493,11 +502,11 @@ claude plugin install skim@skim</pre>
       </div>
       <div class="lim">
         <h3>Costs are close on small files</h3>
-        <p>The worker is cheap but not free, and it reads content in order to compress it. On Opus a long file pays for itself on the first read; a file just over the threshold needs to stay relevant for a few more turns. On a Haiku session it does not pay off at all. <code>make bench FILE=…</code> measures your case.</p>
+        <p>For the 32 structurally-parsed languages, interception is always free. For other files the worker is cheap but not free: on Opus a long file pays for itself on the first read; a file just over the threshold needs to stay relevant for a few more turns. On a Haiku session those worker-path files do not pay off. <code>make bench FILE=…</code> measures your case.</p>
       </div>
       <div class="lim">
         <h3>Savings shrink with cheaper sessions</h3>
-        <p>The mechanic moves bulk content out of the <em>session</em> model's context, so its value scales with that model's per-token weight. On a Haiku session the trade can go negative once worker calls are counted.</p>
+        <p>For the 32 structurally-parsed languages, savings are always positive — no worker cost to subtract. For other files, value scales with the session model's per-token weight; on a Haiku session the worker-path trade can go negative. <code>skim stats</code> settles it in dollars.</p>
       </div>
       <div class="lim">
         <h3>Single-host binary</h3>
