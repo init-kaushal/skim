@@ -36,7 +36,7 @@
 //   - .clj/.cljs/.cljc              — defn/defprotocol/defrecord/deftype/def; paren-depth tracking
 //   - .fs/.fsx/.fsi                 — module/namespace/type/let bindings; val sigs in .fsi; nestable (* *) comments
 //   - .erl/.hrl                     — -module/-record/-type attributes; function clauses; -define macros in headers
-//   - .zig                          — fn/pub fn declarations; const Type = struct/union/enum/opaque; column-0 rule
+//   - .zig                          — fn/pub fn declarations; const Type = struct/union/enum/opaque; brace-depth tracking
 //
 // All other extensions fall through to the worker path.
 package filemap
