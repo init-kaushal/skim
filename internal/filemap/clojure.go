@@ -97,12 +97,12 @@ func parseClojureFile(src, filePath string) (digest.FileMap, bool) {
 
 	for _, raw := range lines {
 		trimmed := strings.TrimSpace(raw)
-		if trimmed == "" || strings.HasPrefix(trimmed, ";") {
-			continue
-		}
 
 		// Collect at depth 0 BEFORE updating depth.
-		if depth == 0 {
+		// Skip collection for blank lines and real comment lines (not when
+		// we're inside a multiline string — a semicolon-prefixed line can be
+		// string content, not a comment).
+		if depth == 0 && trimmed != "" && (inString || !strings.HasPrefix(trimmed, ";")) {
 			if m := clojureNS.FindStringSubmatch(trimmed); m != nil {
 				if nsName == "" {
 					nsName = m[1]

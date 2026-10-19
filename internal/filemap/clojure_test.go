@@ -413,6 +413,30 @@ func TestGenerate_Clojure_Generated(t *testing.T) {
 	}
 }
 
+// TestGenerate_Clojure_MultilineStringWithSemicolon: a multiline string whose
+// closing quote is on a semicolon-prefixed line must not leave the scanner in
+// string mode, causing subsequent declarations to be missed.
+//
+// Regression for the early-skip bug: blank/semicolon lines were skipped
+// before clojureNetDepth ran, so a closing " on such a line was never seen.
+func TestGenerate_Clojure_MultilineStringWithSemicolon(t *testing.T) {
+	src := "(ns example.core)\n" +
+		"\n" +
+		"(def description \"first line\n" +
+		"; this line is string content and closes the string: \"\n" +
+		")\n" +
+		"\n" +
+		"(defn later [] 42)\n"
+	fm, ok := Generate(src, "core.clj")
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	kind := fm.Map[0].Kind
+	if !strings.Contains(kind, "later") {
+		t.Errorf("kind %q missing 'later' — multiline string with semicolon line corrupted depth", kind)
+	}
+}
+
 // TestGenerate_Clojure_FallsThrough_Empty: empty file falls through.
 func TestGenerate_Clojure_FallsThrough_Empty(t *testing.T) {
 	_, ok := Generate("", "empty.clj")
