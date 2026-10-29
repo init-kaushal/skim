@@ -78,7 +78,7 @@ func parseCSharpFile(src, _ string) (digest.FileMap, bool) {
 	// outerDepth tracks brace depth of namespace blocks and other non-type
 	// scopes at the top level (depth when cur == nil).
 	outerDepth := 0
-	bcDepth := 0   // C# block comment nesting (/* ... */ are not nested in C#, but track for uniformity)
+	bcDepth := 0         // C# block comment nesting (/* ... */ are not nested in C#, but track for uniformity)
 	inTextBlock := false // verbatim strings @"..." and raw strings """..."""
 
 	closeBlock := func(endLine int) {

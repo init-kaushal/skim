@@ -347,7 +347,7 @@ class Another {
 }
 
 // TestGenerate_Dart_TripleQuote verifies that braces inside triple-quoted strings
-// do not corrupt depth tracking. Dart triple-quoted strings (""" and ''') are
+// do not corrupt depth tracking. Dart triple-quoted strings (""" and ”') are
 // handled by the natural toggle behaviour of the persistent *inDouble / *inSingle
 // state: three quote characters flip the state an odd number of times, so after
 // the opening triple the state is "inside string" and braces are skipped.

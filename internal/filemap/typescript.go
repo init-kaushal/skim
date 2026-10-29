@@ -366,4 +366,3 @@ func tsKindLabel(keyword, name, line string) string {
 	}
 	return fmt.Sprintf("export %s %s", keyword, name)
 }
-

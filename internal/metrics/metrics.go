@@ -15,8 +15,8 @@ import (
 // — including `skim run`, which for a long time wrote none at all and so made
 // the whole Bash side of the ledger invisible.
 type Entry struct {
-	TS              string `json:"ts"`
-	Tool            string `json:"tool"`
+	TS   string `json:"ts"`
+	Tool string `json:"tool"`
 	// Strategy is the routing decision that produced this entry (Phase 1+).
 	// Empty on entries written before Phase 1 (backward compatible).
 	Strategy        string `json:"strategy,omitempty"`

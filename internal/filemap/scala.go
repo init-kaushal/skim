@@ -68,7 +68,7 @@ func parseScalaFile(src, _ string) (digest.FileMap, bool) {
 	var cur *scalaBlock
 	var pendingBlock *scalaBlock // waiting for opening "{"
 	depth := 0
-	bcDepth := 0       // block comment depth (not nested in Scala)
+	bcDepth := 0 // block comment depth (not nested in Scala)
 	inTripleQuote := false
 
 	closeBlock := func(endLine int) {

@@ -35,8 +35,8 @@ func TestGenerate_PassthroughLockFiles(t *testing.T) {
 	// protection comes from the default PassthroughGlobs in config.Default().
 	// Here we verify that the ones that DO have parsers also fall through.
 	cases := []struct {
-		name    string
-		src     string
+		name string
+		src  string
 	}{
 		// JSON lock files (handled in json.go lockFileNames)
 		{"package-lock.json", `{"lockfileVersion": 3, "packages": {}}`},

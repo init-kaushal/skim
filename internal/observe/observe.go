@@ -37,9 +37,9 @@ type Entry struct {
 	EstNetSavingsUSD float64 `json:"est_net_savings_usd,omitempty"`
 	// PredictedRatio is the output_tokens/input_tokens estimate used for the
 	// cost calculation. Comes from calibration or DefaultOutputRatio.
-	PredictedRatio  float64 `json:"predicted_ratio,omitempty"`
-	CompressorKind  string  `json:"compressor_kind,omitempty"`
-	CompressRatio   float64 `json:"compress_ratio,omitempty"`
+	PredictedRatio float64 `json:"predicted_ratio,omitempty"`
+	CompressorKind string  `json:"compressor_kind,omitempty"`
+	CompressRatio  float64 `json:"compress_ratio,omitempty"`
 	// ActualWorkerCostUSD is the actual billed cost of the worker call.
 	// Zero for cache hits, dry-run, deterministic, or passthrough.
 	ActualWorkerCostUSD float64 `json:"actual_worker_cost_usd,omitempty"`

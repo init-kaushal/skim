@@ -13,9 +13,9 @@ import (
 // the model unchanged. A structural digest of a lock file is actively
 // unhelpful — the model needs package versions, not a summary.
 var lockFileNames = map[string]bool{
-	"package-lock.json": true,
+	"package-lock.json":   true,
 	"npm-shrinkwrap.json": true,
-	"composer.lock": true,
+	"composer.lock":       true,
 }
 
 // parseJSONFile builds a FileMap from a JSON source file.

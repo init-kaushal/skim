@@ -226,7 +226,7 @@ func parseDartFile(src, _ string) (digest.FileMap, bool) {
 // double-quoted strings, single-quoted strings, // and /// comments, and
 // /* */ block comments. inDouble and inSingle are persistent across calls.
 //
-// Triple-quoted strings (""" and ''') are handled naturally: three consecutive
+// Triple-quoted strings (""" and ”') are handled naturally: three consecutive
 // quote characters toggle the persistent string state three times — from false
 // to true, true to false, false to true — so at the end of the triple opener
 // the state is true (open), and the matching triple closer returns it to false.

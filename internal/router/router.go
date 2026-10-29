@@ -39,7 +39,7 @@ type Router struct {
 
 // Result is the outcome of a Summarize call.
 type Result struct {
-	Raw      []byte
+	Raw []byte
 	// Usage is the aggregate across every attempted tier — including tiers that
 	// escalated. CostUSD is the sum of all calls; InputTokens and cache variants
 	// are likewise cumulative. OutputTokens holds only the successful tier's

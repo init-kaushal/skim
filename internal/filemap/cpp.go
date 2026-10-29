@@ -79,10 +79,10 @@ func parseCppFile(src, _ string) (digest.FileMap, bool) {
 	var cur *cppBlock
 	var pendingBlock *cppBlock
 	depth := 0
-	outerDepth := 0       // namespace / extern-C outer scope depth
-	bcDepth := 0          // block comment depth (not nested in C/C++, but int for uniformity)
-	rawStringDelim := ""  // expected closing sequence for a multi-line raw string, e.g. )foo"
-	inTypedef := false    // tracking a "typedef struct/union/enum { ... } Name;" block
+	outerDepth := 0      // namespace / extern-C outer scope depth
+	bcDepth := 0         // block comment depth (not nested in C/C++, but int for uniformity)
+	rawStringDelim := "" // expected closing sequence for a multi-line raw string, e.g. )foo"
+	inTypedef := false   // tracking a "typedef struct/union/enum { ... } Name;" block
 
 	closeBlock := func(endLine int) {
 		if cur != nil {

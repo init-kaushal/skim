@@ -29,8 +29,8 @@ var (
 
 // tomlSection tracks one table block while parsing.
 type tomlSection struct {
-	header    string   // e.g. "package", "dependencies", "bin"
-	isArray   bool     // true for [[...]] headers
+	header    string // e.g. "package", "dependencies", "bin"
+	isArray   bool   // true for [[...]] headers
 	startLine int
 	endLine   int
 	keys      []string // up to 12 key names

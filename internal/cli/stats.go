@@ -33,12 +33,12 @@ const defaultSessionModel = "opus-5"
 // strategyOrder controls how the per-strategy table is printed — cheapest
 // (most desirable) tier first, most expensive last.
 var strategyOrder = []string{
-	"DETERMINISTIC",   // go/ast, TS regex, Python regex — zero worker cost
-	"CHEAP_WORKER",    // Haiku worker call
-	"NORMAL_WORKER",   // Sonnet (escalated from Haiku, or configured)
-	"DEEP_WORKER",     // Opus (escalated from Sonnet, or configured)
-	"DIRECT",          // passed through — engine decided not worth intercepting
-	"PASSTHROUGH",     // explicitly excluded (glob, binary, etc.)
+	"DETERMINISTIC", // go/ast, TS regex, Python regex — zero worker cost
+	"CHEAP_WORKER",  // Haiku worker call
+	"NORMAL_WORKER", // Sonnet (escalated from Haiku, or configured)
+	"DEEP_WORKER",   // Opus (escalated from Sonnet, or configured)
+	"DIRECT",        // passed through — engine decided not worth intercepting
+	"PASSTHROUGH",   // explicitly excluded (glob, binary, etc.)
 }
 
 // strategyNote is a one-phrase human label shown next to each tier.

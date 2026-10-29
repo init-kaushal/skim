@@ -45,12 +45,12 @@ var KnownPricing = map[string]ModelPricing{
 type Strategy string
 
 const (
-	StrategyPassthrough   Strategy = "PASSTHROUGH"    // allowed without analysis
-	StrategyDeterministic Strategy = "DETERMINISTIC"  // compacted without LLM
-	StrategyCheapWorker   Strategy = "CHEAP_WORKER"   // Haiku worker
-	StrategyNormalWorker  Strategy = "NORMAL_WORKER"  // Sonnet escalation
-	StrategyDeepWorker    Strategy = "DEEP_WORKER"    // Opus escalation
-	StrategyDirect        Strategy = "DIRECT"         // savings don't justify cost
+	StrategyPassthrough   Strategy = "PASSTHROUGH"   // allowed without analysis
+	StrategyDeterministic Strategy = "DETERMINISTIC" // compacted without LLM
+	StrategyCheapWorker   Strategy = "CHEAP_WORKER"  // Haiku worker
+	StrategyNormalWorker  Strategy = "NORMAL_WORKER" // Sonnet escalation
+	StrategyDeepWorker    Strategy = "DEEP_WORKER"   // Opus escalation
+	StrategyDirect        Strategy = "DIRECT"        // savings don't justify cost
 )
 
 // Decision is the outcome of an interception evaluation.
